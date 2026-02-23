@@ -1,0 +1,6 @@
+[submodule "references/ghostty"]
+	path = references/ghostty
+	url = https://github.com/ghostty-org/ghostty.git
+[submodule "references/zed"]
+	path = references/zed
+	url = https://github.com/zed-industries/zed.git
