@@ -1,0 +1,195 @@
+/// Input event handling for Cotty.
+/// Maps to Ghostty's input.zig.
+
+/// A raw key event from the platform layer.
+struct KeyEvent {
+    key: int,
+    mods: int,
+}
+
+/// Modifier key bit flags.
+const MOD_NONE: int = 0
+const MOD_CTRL: int = 1
+const MOD_SHIFT: int = 2
+const MOD_ALT: int = 4
+const MOD_SUPER: int = 8
+
+/// High-level editor actions derived from input events.
+const InputAction = enum(u8) {
+    none,
+    insert_char,
+    delete_back,
+    delete_forward,
+    move_left,
+    move_right,
+    move_up,
+    move_down,
+    move_line_start,
+    move_line_end,
+    page_up,
+    page_down,
+    save,
+    quit,
+    new_surface,
+    close_surface,
+}
+
+impl InputAction {
+    /// Return a display name for this action.
+    fn name() string {
+        return switch (self) {
+            .none => "none",
+            .insert_char => "insert_char",
+            .delete_back => "delete_back",
+            .delete_forward => "delete_forward",
+            .move_left => "move_left",
+            .move_right => "move_right",
+            .move_up => "move_up",
+            .move_down => "move_down",
+            .move_line_start => "move_line_start",
+            .move_line_end => "move_line_end",
+            .page_up => "page_up",
+            .page_down => "page_down",
+            .save => "save",
+            .quit => "quit",
+            .new_surface => "new_surface",
+            .close_surface => "close_surface",
+        }
+    }
+}
+
+/// Common key constants (ASCII values for basic keys).
+const KEY_BACKSPACE: int = 8
+const KEY_TAB: int = 9
+const KEY_ENTER: int = 13
+const KEY_ESCAPE: int = 27
+const KEY_DELETE: int = 127
+const KEY_ARROW_UP: int = 256
+const KEY_ARROW_DOWN: int = 257
+const KEY_ARROW_LEFT: int = 258
+const KEY_ARROW_RIGHT: int = 259
+const KEY_HOME: int = 260
+const KEY_END: int = 261
+const KEY_PAGE_UP: int = 262
+const KEY_PAGE_DOWN: int = 263
+
+/// Map a key event to an editor action.
+fn keyToAction(event: KeyEvent) InputAction {
+    const has_ctrl = (event.mods & MOD_CTRL) != 0
+
+    // Ctrl+key shortcuts
+    if (has_ctrl) {
+        if (event.key == 's') { return InputAction.save }
+        if (event.key == 'q') { return InputAction.quit }
+        if (event.key == 'n') { return InputAction.new_surface }
+        if (event.key == 'w') { return InputAction.close_surface }
+        if (event.key == 'a') { return InputAction.move_line_start }
+        if (event.key == 'e') { return InputAction.move_line_end }
+        return InputAction.none
+    }
+
+    // Special keys
+    if (event.key == KEY_BACKSPACE) { return InputAction.delete_back }
+    if (event.key == KEY_DELETE) { return InputAction.delete_forward }
+    if (event.key == KEY_ARROW_LEFT) { return InputAction.move_left }
+    if (event.key == KEY_ARROW_RIGHT) { return InputAction.move_right }
+    if (event.key == KEY_ARROW_UP) { return InputAction.move_up }
+    if (event.key == KEY_ARROW_DOWN) { return InputAction.move_down }
+    if (event.key == KEY_HOME) { return InputAction.move_line_start }
+    if (event.key == KEY_END) { return InputAction.move_line_end }
+    if (event.key == KEY_PAGE_UP) { return InputAction.page_up }
+    if (event.key == KEY_PAGE_DOWN) { return InputAction.page_down }
+
+    // Printable characters (ASCII 32-126)
+    if (event.key >= 32 and event.key <= 126) {
+        return InputAction.insert_char
+    }
+
+    // Enter key — insert newline
+    if (event.key == KEY_ENTER) {
+        return InputAction.insert_char
+    }
+
+    // Tab key — insert tab
+    if (event.key == KEY_TAB) {
+        return InputAction.insert_char
+    }
+
+    return InputAction.none
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+test "key to action ctrl+s" {
+    const event = KeyEvent { key:'s', mods:MOD_CTRL }
+    @assertEq(keyToAction(event), InputAction.save)
+}
+
+test "key to action ctrl+q" {
+    const event = KeyEvent { key:'q', mods:MOD_CTRL }
+    @assertEq(keyToAction(event), InputAction.quit)
+}
+
+test "key to action backspace" {
+    const event = KeyEvent { key:KEY_BACKSPACE, mods:MOD_NONE }
+    @assertEq(keyToAction(event), InputAction.delete_back)
+}
+
+test "key to action delete" {
+    const event = KeyEvent { key:KEY_DELETE, mods:MOD_NONE }
+    @assertEq(keyToAction(event), InputAction.delete_forward)
+}
+
+test "key to action arrows" {
+    @assertEq(keyToAction(KeyEvent { key:KEY_ARROW_LEFT, mods:0 }), InputAction.move_left)
+    @assertEq(keyToAction(KeyEvent { key:KEY_ARROW_RIGHT, mods:0 }), InputAction.move_right)
+    @assertEq(keyToAction(KeyEvent { key:KEY_ARROW_UP, mods:0 }), InputAction.move_up)
+    @assertEq(keyToAction(KeyEvent { key:KEY_ARROW_DOWN, mods:0 }), InputAction.move_down)
+}
+
+test "key to action printable char" {
+    const event = KeyEvent { key:'a', mods:MOD_NONE }
+    @assertEq(keyToAction(event), InputAction.insert_char)
+}
+
+test "key to action space" {
+    const event = KeyEvent { key:' ', mods:MOD_NONE }
+    @assertEq(keyToAction(event), InputAction.insert_char)
+}
+
+test "key to action ctrl+n new surface" {
+    const event = KeyEvent { key:'n', mods:MOD_CTRL }
+    @assertEq(keyToAction(event), InputAction.new_surface)
+}
+
+test "key to action ctrl+w close surface" {
+    const event = KeyEvent { key:'w', mods:MOD_CTRL }
+    @assertEq(keyToAction(event), InputAction.close_surface)
+}
+
+test "key to action home end" {
+    @assertEq(keyToAction(KeyEvent { key:KEY_HOME, mods:0 }), InputAction.move_line_start)
+    @assertEq(keyToAction(KeyEvent { key:KEY_END, mods:0 }), InputAction.move_line_end)
+}
+
+test "key to action page up down" {
+    @assertEq(keyToAction(KeyEvent { key:KEY_PAGE_UP, mods:0 }), InputAction.page_up)
+    @assertEq(keyToAction(KeyEvent { key:KEY_PAGE_DOWN, mods:0 }), InputAction.page_down)
+}
+
+test "action name" {
+    @assertEq(InputAction.save.name(), "save")
+    @assertEq(InputAction.quit.name(), "quit")
+    @assertEq(InputAction.insert_char.name(), "insert_char")
+    @assertEq(InputAction.none.name(), "none")
+}
+
+test "modifier constants" {
+    @assertEq(MOD_NONE, 0)
+    @assertEq(MOD_CTRL, 1)
+    @assertEq(MOD_SHIFT, 2)
+    @assertEq(MOD_ALT, 4)
+    @assertEq(MOD_SUPER, 8)
+}

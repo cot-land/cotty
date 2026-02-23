@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "cot-tools": {
+      "type": "stdio",
+      "command": "cot",
+      "args": ["mcp"]
+    }
+  }
+}

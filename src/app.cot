@@ -1,0 +1,201 @@
+/// Application state for Cotty.
+/// Maps to Ghostty's App.zig — the top-level owner of all surfaces and state.
+
+import "std/list"
+import "std/string"
+import "surface"
+import "config"
+import "message"
+
+/// The core application state. Owns surfaces, config, and the message mailbox.
+struct App {
+    surfaces: List(Surface),
+    config: Config,
+    focused_surface: ?int,
+    running: bool,
+    mailbox: List(Message),
+}
+
+impl App {
+    /// Create and initialize the application with default config.
+    static fn init() App {
+        var surfaces: List(Surface) = undefined
+        surfaces.items = 0
+        surfaces.count = 0
+        surfaces.capacity = 0
+
+        var mailbox: List(Message) = undefined
+        mailbox.items = 0
+        mailbox.count = 0
+        mailbox.capacity = 0
+
+        return App {
+            surfaces: surfaces,
+            config: Config.init(),
+            focused_surface: null,
+            running: true,
+            mailbox: mailbox,
+        }
+    }
+
+    /// Add a new empty surface. Returns its index.
+    fn addSurface() int {
+        const idx = self.surfaces.count
+        self.surfaces.append(Surface.init())
+        if (self.focused_surface == null) {
+            self.focused_surface = idx
+        }
+        return idx
+    }
+
+    /// Add a surface from a file path. Returns its index.
+    fn addSurfaceFromFile(path: string) int {
+        const idx = self.surfaces.count
+        self.surfaces.append(Surface.initFromFile(path))
+        self.focused_surface = idx
+        return idx
+    }
+
+    /// Remove a surface by index.
+    fn removeSurface(idx: int) void {
+        if (idx < 0 or idx >= self.surfaces.count) { return }
+        self.surfaces.orderedRemove(idx)
+        if (self.surfaces.count == 0) {
+            self.focused_surface = null
+        } else if (self.focused_surface) |focus| {
+            if (focus >= self.surfaces.count) {
+                self.focused_surface = self.surfaces.count - 1
+            }
+        }
+    }
+
+    /// Post a message to the mailbox.
+    fn postMessage(msg: Message) void {
+        self.mailbox.append(msg)
+    }
+
+    /// Process all queued mailbox messages.
+    fn drainMailbox() void {
+        var i = 0
+        while (i < self.mailbox.count) {
+            const msg = self.mailbox.get(i)
+            self.handleMessage(msg)
+            i += 1
+        }
+        // Clear the mailbox
+        self.mailbox.count = 0
+    }
+
+    /// Handle a single message.
+    fn handleMessage(msg: Message) void {
+        switch (msg) {
+            Message.open_file |path| => {
+                self.addSurfaceFromFile(path)
+            },
+            Message.close_surface |idx| => {
+                self.removeSurface(idx)
+            },
+            Message.quit => {
+                self.running = false
+            },
+            Message.save => {
+                // Save handled by surface directly
+            },
+            Message.redraw => {
+                // Redraw handled by render loop
+            },
+        }
+    }
+
+    /// Run one tick of the application loop.
+    fn tick() void {
+        self.drainMailbox()
+    }
+
+    /// Return the number of open surfaces.
+    fn surfaceCount() int {
+        return self.surfaces.count
+    }
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+test "app init" {
+    var app = App.init()
+    @assertEq(app.running, true)
+    @assertEq(app.surfaceCount(), 0)
+    @assert(app.focused_surface == null)
+}
+
+test "app add surface" {
+    var app = App.init()
+    const idx = app.addSurface()
+    @assertEq(idx, 0)
+    @assertEq(app.surfaceCount(), 1)
+    @assertEq(app.focused_surface.?, 0)
+}
+
+test "app add multiple surfaces" {
+    var app = App.init()
+    app.addSurface()
+    app.addSurface()
+    app.addSurface()
+    @assertEq(app.surfaceCount(), 3)
+}
+
+test "app remove surface" {
+    var app = App.init()
+    app.addSurface()
+    app.addSurface()
+    app.removeSurface(0)
+    @assertEq(app.surfaceCount(), 1)
+}
+
+test "app remove last surface clears focus" {
+    var app = App.init()
+    app.addSurface()
+    app.removeSurface(0)
+    @assertEq(app.surfaceCount(), 0)
+    @assert(app.focused_surface == null)
+}
+
+test "app post and drain message" {
+    var app = App.init()
+    app.addSurface()
+    app.postMessage(Message.quit)
+    @assertEq(app.running, true)
+    app.drainMailbox()
+    @assertEq(app.running, false)
+}
+
+test "app tick drains mailbox" {
+    var app = App.init()
+    app.postMessage(Message.quit)
+    app.tick()
+    @assertEq(app.running, false)
+}
+
+test "app open file message" {
+    var app = App.init()
+    app.postMessage(Message.open_file("test.cot"))
+    app.drainMailbox()
+    @assertEq(app.surfaceCount(), 1)
+}
+
+test "app close surface message" {
+    var app = App.init()
+    app.addSurface()
+    app.addSurface()
+    app.postMessage(Message.close_surface(0))
+    app.drainMailbox()
+    @assertEq(app.surfaceCount(), 1)
+}
+
+test "app config defaults" {
+    var app = App.init()
+    @assertEq(app.config.tab_width, 4)
+    @assertEq(app.config.show_line_numbers, true)
+    @assertEq(app.config.theme, "default")
+}

@@ -1,0 +1,160 @@
+/// Editor surface: a single editor view with buffer, cursor, and viewport.
+/// Maps to Ghostty's Surface.zig.
+
+import "std/os"
+import "std/fs"
+import "std/string"
+import "buffer"
+import "cursor"
+import "input"
+
+/// A single editor surface (tab/window).
+struct Surface {
+    buffer: Buffer,
+    cursor: Cursor,
+    scroll_offset: int,
+    filepath: ?string,
+    dirty: bool,
+}
+
+impl Surface {
+    /// Create an empty, untitled surface.
+    static fn init() Surface {
+        return Surface {
+            buffer:Buffer.init(),
+            cursor:Cursor.init(),
+            scroll_offset: 0,
+            filepath: null,
+            dirty: false,
+        }
+    }
+
+    /// Create a surface from a file path.
+    static fn initFromFile(path: string) Surface {
+        const content = readFile(path) catch {
+            // File doesn't exist yet — create empty surface with path
+            return Surface {
+                buffer:Buffer.init(),
+                cursor:Cursor.init(),
+                scroll_offset: 0,
+                filepath: path,
+                dirty: false,
+            }
+        }
+
+        return Surface {
+            buffer:Buffer.initWithContent(content),
+            cursor:Cursor.init(),
+            scroll_offset: 0,
+            filepath: path,
+            dirty: false,
+        }
+    }
+
+    /// Handle an input action, mutating buffer and cursor as needed.
+    fn handleInput(action: InputAction, key: int) void {
+        switch (action) {
+            InputAction.insert_char => {
+                self.buffer.moveGapTo(self.cursor.offset)
+                self.buffer.insert(key)
+                self.cursor.moveRight(self.buffer.len())
+                if (key == '\n') {
+                    self.cursor.line += 1
+                    self.cursor.col = 0
+                }
+                self.dirty = true
+            },
+            InputAction.delete_back => {
+                if (self.cursor.offset > 0) {
+                    self.buffer.moveGapTo(self.cursor.offset)
+                    self.buffer.deleteBack()
+                    self.cursor.moveLeft()
+                    self.dirty = true
+                }
+            },
+            InputAction.delete_forward => {
+                if (self.cursor.offset < self.buffer.len()) {
+                    self.buffer.moveGapTo(self.cursor.offset)
+                    self.buffer.deleteForward()
+                    self.dirty = true
+                }
+            },
+            InputAction.move_left => {
+                self.cursor.moveLeft()
+            },
+            InputAction.move_right => {
+                self.cursor.moveRight(self.buffer.len())
+            },
+            InputAction.move_up => {
+                self.cursor.moveUp()
+            },
+            InputAction.move_down => {
+                self.cursor.moveDown(self.buffer.lineCount())
+            },
+            InputAction.move_line_start => {
+                self.cursor.moveToLineStart()
+            },
+            else => {},
+        }
+    }
+
+    /// Render the surface content to a string (for testing/debugging).
+    fn render() string {
+        return self.buffer.toString()
+    }
+
+    /// Return the title for this surface (filename or "untitled").
+    fn title() string {
+        if (self.filepath) |path| {
+            return path
+        }
+        return "untitled"
+    }
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+test "surface init empty" {
+    var s = Surface.init()
+    @assertEq(s.buffer.len(), 0)
+    @assertEq(s.cursor.line, 0)
+    @assertEq(s.cursor.col, 0)
+    @assertEq(s.dirty, false)
+    @assertEq(s.title(), "untitled")
+}
+
+test "surface handle insert" {
+    var s = Surface.init()
+    s.handleInput(InputAction.insert_char, 'h')
+    s.handleInput(InputAction.insert_char, 'i')
+    @assertEq(s.buffer.len(), 2)
+    @assertEq(s.render(), "hi")
+    @assertEq(s.dirty, true)
+}
+
+test "surface handle delete back" {
+    var s = Surface.init()
+    s.handleInput(InputAction.insert_char, 'a')
+    s.handleInput(InputAction.insert_char, 'b')
+    s.handleInput(InputAction.delete_back, 0)
+    @assertEq(s.render(), "a")
+}
+
+test "surface handle move" {
+    var s = Surface.init()
+    s.handleInput(InputAction.insert_char, 'a')
+    s.handleInput(InputAction.insert_char, 'b')
+    @assertEq(s.cursor.offset, 2)
+    s.handleInput(InputAction.move_left, 0)
+    @assertEq(s.cursor.offset, 1)
+    s.handleInput(InputAction.move_right, 0)
+    @assertEq(s.cursor.offset, 2)
+}
+
+test "surface title with filepath" {
+    var s = Surface.init()
+    s.filepath = "test.cot"
+    @assertEq(s.title(), "test.cot")
+}

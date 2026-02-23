@@ -1,0 +1,6 @@
+{
+  "name": "cotty",
+  "version": "0.1.0",
+  "main": "src/main.cot",
+  "safe": true
+}

@@ -1,0 +1,64 @@
+/// Mailbox messages for inter-component communication.
+/// Maps to Ghostty's Mailbox pattern in App.zig.
+///
+/// Messages enable decoupled communication between components.
+/// Instead of direct method calls, components post messages to a mailbox
+/// which the App drains on each tick.
+
+/// Message types for inter-component communication.
+union Message {
+    open_file: string,
+    close_surface: int,
+    save,
+    quit,
+    redraw,
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+test "message open_file" {
+    var msg = Message.open_file("test.cot")
+    const path = switch (msg) {
+        Message.open_file |p| => p,
+        else => "",
+    }
+    @assertEq(path, "test.cot")
+}
+
+test "message close_surface" {
+    var msg = Message.close_surface(0)
+    const idx = switch (msg) {
+        Message.close_surface |i| => i,
+        else => -1,
+    }
+    @assertEq(idx, 0)
+}
+
+test "message quit tag" {
+    var msg = Message.quit
+    const is_quit = switch (msg) {
+        Message.quit => true,
+        else => false,
+    }
+    @assertEq(is_quit, true)
+}
+
+test "message save tag" {
+    var msg = Message.save
+    const is_save = switch (msg) {
+        Message.save => true,
+        else => false,
+    }
+    @assertEq(is_save, true)
+}
+
+test "message redraw tag" {
+    var msg = Message.redraw
+    const is_redraw = switch (msg) {
+        Message.redraw => true,
+        else => false,
+    }
+    @assertEq(is_redraw, true)
+}

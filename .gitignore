@@ -2,3 +2,6 @@ zig-out/
 zig-cache/
 .zig-cache/
 .DS_Store
+
+# Stdlib symlink (local dev — points to ~/cotlang/cot/stdlib)
+stdlib
