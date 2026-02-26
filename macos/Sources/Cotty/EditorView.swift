@@ -1,4 +1,5 @@
 import AppKit
+import CCottyCore
 import Metal
 import QuartzCore
 
@@ -8,12 +9,11 @@ import QuartzCore
 class EditorView: NSView {
     // MARK: - State
 
-    private var buffer = GapBuffer()
-    private var cursor = Cursor()
     private var scrollPixelOffset: CGFloat = 0
     private var cursorVisible: Bool = true
     private var blinkTimer: Timer?
 
+    let surface: CottySurface
     weak var windowController: EditorWindowController?
 
     // Metal
@@ -30,7 +30,8 @@ class EditorView: NSView {
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
 
-    override init(frame: NSRect) {
+    init(frame: NSRect, surface: CottySurface) {
+        self.surface = surface
         metalView = MetalLayerView(frame: frame, device: Self.metalDevice)
         super.init(frame: frame)
         renderer = MetalRenderer(device: Self.metalDevice)
@@ -81,7 +82,7 @@ class EditorView: NSView {
 
     private func updateContentSize() {
         guard renderer != nil else { return }
-        let contentHeight = CGFloat(buffer.lineCount()) * renderer.cellHeightPoints + Theme.paddingPoints * 2
+        let contentHeight = CGFloat(surface.lineCount) * renderer.cellHeightPoints + Theme.paddingPoints * 2
         let viewH = scrollView.contentView.bounds.height
         sizerView.frame = NSRect(
             x: 0, y: 0,
@@ -122,8 +123,7 @@ class EditorView: NSView {
         guard renderer != nil else { return }
         renderer.render(
             layer: metalView.metalLayer,
-            buffer: buffer,
-            cursor: cursor,
+            surface: surface,
             scrollPixelOffset: scrollPixelOffset,
             cursorVisible: cursorVisible
         )
@@ -138,128 +138,11 @@ class EditorView: NSView {
             return
         }
 
-        let action = mapKeyEvent(event)
-        switch action {
-        case .insertChar:
-            if let chars = event.characters {
-                for ch in chars.utf8 {
-                    buffer.moveGapTo(cursor.offset)
-                    buffer.insert(ch)
-                    cursor.offset += 1
-                    cursor.col += 1
-                    if ch == UInt8(ascii: "\n") {
-                        cursor.line += 1
-                        cursor.col = 0
-                    }
-                }
-                windowController?.markDirty()
-            }
+        let (key, mods) = translateKeyEvent(event)
+        guard key != 0 else { return }
 
-        case .insertNewline:
-            buffer.moveGapTo(cursor.offset)
-            buffer.insert(UInt8(ascii: "\n"))
-            cursor.offset += 1
-            cursor.line += 1
-            cursor.col = 0
-            windowController?.markDirty()
-
-        case .insertTab:
-            buffer.moveGapTo(cursor.offset)
-            for _ in 0..<4 {
-                buffer.insert(UInt8(ascii: " "))
-                cursor.offset += 1
-                cursor.col += 1
-            }
-            windowController?.markDirty()
-
-        case .deleteBack:
-            if cursor.offset > 0 {
-                let deletedChar = buffer.charAt(cursor.offset - 1)
-                buffer.moveGapTo(cursor.offset)
-                buffer.deleteBack()
-                cursor.offset -= 1
-                if deletedChar == UInt8(ascii: "\n") {
-                    recomputeLineCol()
-                } else {
-                    cursor.col -= 1
-                }
-                windowController?.markDirty()
-            }
-
-        case .deleteForward:
-            if cursor.offset < buffer.len {
-                buffer.moveGapTo(cursor.offset)
-                buffer.deleteForward()
-                windowController?.markDirty()
-            }
-
-        case .moveLeft:
-            if cursor.offset > 0 {
-                cursor.offset -= 1
-                if cursor.col > 0 {
-                    cursor.col -= 1
-                } else {
-                    recomputeLineCol()
-                }
-            }
-
-        case .moveRight:
-            if cursor.offset < buffer.len {
-                let ch = buffer.charAt(cursor.offset)
-                cursor.offset += 1
-                if ch == UInt8(ascii: "\n") {
-                    cursor.line += 1
-                    cursor.col = 0
-                } else {
-                    cursor.col += 1
-                }
-            }
-
-        case .moveUp:
-            if cursor.line > 0 {
-                let targetCol = cursor.col
-                cursor.line -= 1
-                let lineLen = buffer.lineLength(cursor.line)
-                cursor.col = min(targetCol, lineLen)
-                recomputeOffset()
-            }
-
-        case .moveDown:
-            let totalLines = buffer.lineCount()
-            if cursor.line < totalLines - 1 {
-                let targetCol = cursor.col
-                cursor.line += 1
-                let lineLen = buffer.lineLength(cursor.line)
-                cursor.col = min(targetCol, lineLen)
-                recomputeOffset()
-            }
-
-        case .moveLineStart:
-            cursor.col = 0
-            recomputeOffset()
-
-        case .moveLineEnd:
-            cursor.col = buffer.lineLength(cursor.line)
-            recomputeOffset()
-
-        case .pageUp:
-            let visibleLines = max(1, Int(bounds.height / renderer.cellHeightPoints) - 1)
-            cursor.line = max(0, cursor.line - visibleLines)
-            let lineLen = buffer.lineLength(cursor.line)
-            cursor.col = min(cursor.col, lineLen)
-            recomputeOffset()
-
-        case .pageDown:
-            let totalLines = buffer.lineCount()
-            let visibleLines = max(1, Int(bounds.height / renderer.cellHeightPoints) - 1)
-            cursor.line = min(totalLines - 1, cursor.line + visibleLines)
-            let lineLen = buffer.lineLength(cursor.line)
-            cursor.col = min(cursor.col, lineLen)
-            recomputeOffset()
-
-        case .none:
-            break
-        }
+        surface.sendKey(key, mods: mods)
+        drainActions()
 
         updateContentSize()
         ensureCursorVisible()
@@ -267,80 +150,74 @@ class EditorView: NSView {
         renderFrame()
     }
 
-    // MARK: - Key Mapping
+    // MARK: - Key Translation (macOS keyCode → Cot key constants)
 
-    private enum EditorAction {
-        case insertChar
-        case insertNewline
-        case insertTab
-        case deleteBack
-        case deleteForward
-        case moveLeft
-        case moveRight
-        case moveUp
-        case moveDown
-        case moveLineStart
-        case moveLineEnd
-        case pageUp
-        case pageDown
-        case none
-    }
+    private func translateKeyEvent(_ event: NSEvent) -> (key: Int64, mods: Int64) {
+        var mods: Int64 = 0
+        if event.modifierFlags.contains(.control) { mods |= 1 }  // MOD_CTRL
+        if event.modifierFlags.contains(.shift) { mods |= 2 }    // MOD_SHIFT
+        if event.modifierFlags.contains(.option) { mods |= 4 }   // MOD_ALT
 
-    private func mapKeyEvent(_ event: NSEvent) -> EditorAction {
+        // Special keys → Cot KEY_* constants
         switch event.keyCode {
-        case 51: return .deleteBack
-        case 117: return .deleteForward
-        case 123:
-            if event.modifierFlags.contains(.command) { return .moveLineStart }
-            return .moveLeft
-        case 124:
-            if event.modifierFlags.contains(.command) { return .moveLineEnd }
-            return .moveRight
-        case 125: return .moveDown
-        case 126: return .moveUp
-        case 115: return .moveLineStart
-        case 119: return .moveLineEnd
-        case 116: return .pageUp
-        case 121: return .pageDown
-        case 36: return .insertNewline
-        case 48: return .insertTab
+        case 51:  return (8, mods)    // Backspace → KEY_BACKSPACE
+        case 117: return (127, mods)  // Delete → KEY_DELETE
+        case 123: return (258, mods)  // Left → KEY_ARROW_LEFT
+        case 124: return (259, mods)  // Right → KEY_ARROW_RIGHT
+        case 125: return (257, mods)  // Down → KEY_ARROW_DOWN
+        case 126: return (256, mods)  // Up → KEY_ARROW_UP
+        case 115: return (260, mods)  // Home → KEY_HOME
+        case 119: return (261, mods)  // End → KEY_END
+        case 116: return (262, mods)  // PageUp → KEY_PAGE_UP
+        case 121: return (263, mods)  // PageDown → KEY_PAGE_DOWN
+        case 36:  return (13, mods)   // Return → KEY_ENTER
+        case 48:  return (9, mods)    // Tab → KEY_TAB
         default: break
         }
 
+        // Ctrl+key — use the unmodified character so Cot sees the letter
+        if mods & 1 != 0, let ch = event.charactersIgnoringModifiers?.unicodeScalars.first {
+            return (Int64(ch.value), mods)
+        }
+
+        // Printable characters
         if let chars = event.characters, !chars.isEmpty {
             let scalar = chars.unicodeScalars.first!
             if scalar.value >= 32 && scalar.value <= 126 {
-                return .insertChar
+                return (Int64(scalar.value), mods)
             }
         }
 
-        return .none
+        return (0, 0)
+    }
+
+    // MARK: - Action Queue
+
+    private func drainActions() {
+        guard let app = surface.app else { return }
+        while let action = app.nextAction() {
+            switch action.tag {
+            case Int64(COTTY_ACTION_MARK_DIRTY):
+                windowController?.markDirty()
+            case Int64(COTTY_ACTION_QUIT):
+                NSApp.terminate(nil)
+            case Int64(COTTY_ACTION_NEW_WINDOW):
+                if let delegate = NSApp.delegate as? AppDelegate {
+                    delegate.newDocument(self)
+                }
+            case Int64(COTTY_ACTION_CLOSE_SURFACE):
+                window?.performClose(nil)
+            default:
+                break
+            }
+        }
     }
 
     // MARK: - Cursor Positioning
 
-    private func recomputeLineCol() {
-        var line = 0
-        var col = 0
-        for i in 0..<cursor.offset {
-            if buffer.charAt(i) == UInt8(ascii: "\n") {
-                line += 1
-                col = 0
-            } else {
-                col += 1
-            }
-        }
-        cursor.line = line
-        cursor.col = col
-    }
-
-    private func recomputeOffset() {
-        cursor.offset = buffer.lineStartOffset(cursor.line) + cursor.col
-    }
-
     private func ensureCursorVisible() {
         let lineH = renderer.cellHeightPoints
-        let cursorY = CGFloat(cursor.line) * lineH
+        let cursorY = CGFloat(surface.cursorLine) * lineH
         let rect = NSRect(x: 0, y: cursorY, width: 1, height: lineH + Theme.paddingPoints)
         sizerView.scrollToVisible(rect)
     }
@@ -363,18 +240,12 @@ class EditorView: NSView {
 
     // MARK: - Public API
 
-    func loadContent(_ content: String) {
-        buffer = GapBuffer(content: content)
-        cursor = Cursor()
+    func resetScroll() {
         scrollPixelOffset = 0
         scrollView.contentView.scroll(to: .zero)
         scrollView.reflectScrolledClipView(scrollView.contentView)
         updateContentSize()
         renderFrame()
-    }
-
-    func bufferContent() -> String {
-        buffer.toString()
     }
 }
 

@@ -120,8 +120,7 @@ class MetalRenderer {
 
     func render(
         layer: CAMetalLayer,
-        buffer: GapBuffer,
-        cursor: Cursor,
+        surface: CottySurface,
         scrollPixelOffset: CGFloat,
         cursorVisible: Bool
     ) {
@@ -140,7 +139,7 @@ class MetalRenderer {
         let firstLine = max(0, Int(floor(scrollPx / cellH)))
         let fracPx = scrollPx - Float(firstLine) * cellH  // sub-line pixel offset
 
-        let totalLines = buffer.lineCount()
+        let totalLines = surface.lineCount
         let visibleLines = Int(ceil((drawH + fracPx) / cellH)) + 1
         let lastLine = min(firstLine + visibleLines, totalLines)
 
@@ -149,8 +148,10 @@ class MetalRenderer {
 
         for lineIdx in firstLine..<lastLine {
             let row = lineIdx - firstLine
-            let content = buffer.lineAt(lineIdx)
-            for (col, ch) in content.utf8.enumerated() {
+            let lineLen = surface.lineLength(lineIdx)
+            let lineStart = surface.lineStartOffset(lineIdx)
+            for col in 0..<lineLen {
+                let ch = surface.charAt(lineStart + col)
                 let g = atlas.lookup(ch)
                 cells.append(CellData(
                     gridX: UInt16(col), gridY: UInt16(row),
@@ -163,11 +164,13 @@ class MetalRenderer {
         }
 
         // Cursor (beam: narrow solid rect, Monokai orange)
-        if cursorVisible && cursor.line >= firstLine && cursor.line < lastLine {
-            let row = cursor.line - firstLine
+        let cursorLine = surface.cursorLine
+        let cursorCol = surface.cursorCol
+        if cursorVisible && cursorLine >= firstLine && cursorLine < lastLine {
+            let row = cursorLine - firstLine
             let solid = atlas.solidInfo
             cells.append(CellData(
-                gridX: UInt16(cursor.col), gridY: UInt16(row),
+                gridX: UInt16(cursorCol), gridY: UInt16(row),
                 atlasX: solid.atlasX, atlasY: solid.atlasY,
                 glyphW: UInt16(max(2, atlas.cellWidth / 8)),
                 glyphH: solid.height,

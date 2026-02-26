@@ -1,9 +1,11 @@
 import AppKit
 
 class AppDelegate: NSObject, NSApplicationDelegate {
+    var cottyApp: CottyApp!
     private var windowControllers: [EditorWindowController] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        cottyApp = CottyApp()
         buildMenuBar()
         newDocument(self)
     }
@@ -15,7 +17,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Window Management
 
     @objc func newDocument(_ sender: Any) {
-        let wc = EditorWindowController()
+        let surface = cottyApp.createSurface()
+        let wc = EditorWindowController(surface: surface)
         windowControllers.append(wc)
         wc.showWindow(nil)
     }
@@ -26,9 +29,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
         panel.begin { [weak self] response in
-            guard response == .OK, let url = panel.url else { return }
-            let wc = EditorWindowController(fileURL: url)
-            self?.windowControllers.append(wc)
+            guard let self, response == .OK, let url = panel.url else { return }
+            let surface = self.cottyApp.createSurface()
+            let wc = EditorWindowController(surface: surface, fileURL: url)
+            self.windowControllers.append(wc)
             wc.showWindow(nil)
         }
     }

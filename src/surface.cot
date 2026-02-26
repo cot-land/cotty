@@ -57,7 +57,8 @@ impl Surface {
             InputAction.insert_char => {
                 self.buffer.moveGapTo(self.cursor.offset)
                 self.buffer.insert(key)
-                self.cursor.moveRight(self.buffer.len())
+                self.cursor.offset += 1
+                self.cursor.col += 1
                 if (key == '\n') {
                     self.cursor.line += 1
                     self.cursor.col = 0
@@ -66,9 +67,15 @@ impl Surface {
             },
             InputAction.delete_back => {
                 if (self.cursor.offset > 0) {
+                    const deleted_char = self.buffer.charAt(self.cursor.offset - 1)
                     self.buffer.moveGapTo(self.cursor.offset)
                     self.buffer.deleteBack()
-                    self.cursor.moveLeft()
+                    self.cursor.offset -= 1
+                    if (deleted_char == '\n') {
+                        self.recomputeLineCol()
+                    } else {
+                        self.cursor.col -= 1
+                    }
                     self.dirty = true
                 }
             },
@@ -80,22 +87,87 @@ impl Surface {
                 }
             },
             InputAction.move_left => {
-                self.cursor.moveLeft()
+                if (self.cursor.offset > 0) {
+                    self.cursor.offset -= 1
+                    if (self.cursor.col > 0) {
+                        self.cursor.col -= 1
+                    } else {
+                        self.recomputeLineCol()
+                    }
+                }
             },
             InputAction.move_right => {
-                self.cursor.moveRight(self.buffer.len())
+                if (self.cursor.offset < self.buffer.len()) {
+                    const ch = self.buffer.charAt(self.cursor.offset)
+                    self.cursor.offset += 1
+                    if (ch == '\n') {
+                        self.cursor.line += 1
+                        self.cursor.col = 0
+                    } else {
+                        self.cursor.col += 1
+                    }
+                }
             },
             InputAction.move_up => {
-                self.cursor.moveUp()
+                if (self.cursor.line > 0) {
+                    const target_col = self.cursor.col
+                    self.cursor.line -= 1
+                    const line_len = self.buffer.lineLength(self.cursor.line)
+                    if (target_col < line_len) {
+                        self.cursor.col = target_col
+                    } else {
+                        self.cursor.col = line_len
+                    }
+                    self.recomputeOffset()
+                }
             },
             InputAction.move_down => {
-                self.cursor.moveDown(self.buffer.lineCount())
+                const total_lines = self.buffer.lineCount()
+                if (self.cursor.line < total_lines - 1) {
+                    const target_col = self.cursor.col
+                    self.cursor.line += 1
+                    const line_len = self.buffer.lineLength(self.cursor.line)
+                    if (target_col < line_len) {
+                        self.cursor.col = target_col
+                    } else {
+                        self.cursor.col = line_len
+                    }
+                    self.recomputeOffset()
+                }
             },
             InputAction.move_line_start => {
-                self.cursor.moveToLineStart()
+                self.cursor.col = 0
+                self.recomputeOffset()
+            },
+            InputAction.move_line_end => {
+                self.cursor.col = self.buffer.lineLength(self.cursor.line)
+                self.recomputeOffset()
             },
             else => {},
         }
+    }
+
+    /// Recompute line/col from byte offset by scanning from start.
+    fn recomputeLineCol() void {
+        var line = 0
+        var col = 0
+        var i = 0
+        while (i < self.cursor.offset) {
+            if (self.buffer.charAt(i) == '\n') {
+                line += 1
+                col = 0
+            } else {
+                col += 1
+            }
+            i += 1
+        }
+        self.cursor.line = line
+        self.cursor.col = col
+    }
+
+    /// Recompute byte offset from line/col.
+    fn recomputeOffset() void {
+        self.cursor.offset = self.buffer.lineStartOffset(self.cursor.line) + self.cursor.col
     }
 
     /// Render the surface content to a string (for testing/debugging).
@@ -157,4 +229,133 @@ test "surface title with filepath" {
     var s = Surface.init()
     s.filepath = "test.cot"
     @assertEq(s.title(), "test.cot")
+}
+
+test "surface insert newline updates line col" {
+    var s = Surface.init()
+    s.handleInput(InputAction.insert_char, 'a')
+    s.handleInput(InputAction.insert_char, 'b')
+    s.handleInput(InputAction.insert_char, '\n')
+    s.handleInput(InputAction.insert_char, 'c')
+    @assertEq(s.cursor.line, 1)
+    @assertEq(s.cursor.col, 1)
+    @assertEq(s.cursor.offset, 4)
+}
+
+test "surface delete back newline recomputes" {
+    var s = Surface.init()
+    s.handleInput(InputAction.insert_char, 'a')
+    s.handleInput(InputAction.insert_char, 'b')
+    s.handleInput(InputAction.insert_char, '\n')
+    s.handleInput(InputAction.insert_char, 'c')
+    // cursor at line 1, col 1, offset 4
+    // delete 'c' — stays on line 1
+    s.handleInput(InputAction.delete_back, 0)
+    @assertEq(s.cursor.line, 1)
+    @assertEq(s.cursor.col, 0)
+    @assertEq(s.cursor.offset, 3)
+    // delete '\n' — recompute: back to line 0
+    s.handleInput(InputAction.delete_back, 0)
+    @assertEq(s.cursor.line, 0)
+    @assertEq(s.cursor.col, 2)
+    @assertEq(s.cursor.offset, 2)
+}
+
+test "surface move left across newline" {
+    var s = Surface.init()
+    s.handleInput(InputAction.insert_char, 'a')
+    s.handleInput(InputAction.insert_char, '\n')
+    s.handleInput(InputAction.insert_char, 'b')
+    // cursor at line 1, col 1, offset 3
+    s.handleInput(InputAction.move_left, 0)
+    // now at line 1, col 0, offset 2
+    @assertEq(s.cursor.line, 1)
+    @assertEq(s.cursor.col, 0)
+    @assertEq(s.cursor.offset, 2)
+    // move left again — cross newline to line 0
+    s.handleInput(InputAction.move_left, 0)
+    @assertEq(s.cursor.line, 0)
+    @assertEq(s.cursor.col, 1)
+    @assertEq(s.cursor.offset, 1)
+}
+
+test "surface move right across newline" {
+    var s = Surface.init()
+    s.handleInput(InputAction.insert_char, 'a')
+    s.handleInput(InputAction.insert_char, '\n')
+    s.handleInput(InputAction.insert_char, 'b')
+    // Go back to start
+    s.cursor.offset = 0
+    s.cursor.line = 0
+    s.cursor.col = 0
+    // move right: 'a' -> col 1
+    s.handleInput(InputAction.move_right, 0)
+    @assertEq(s.cursor.col, 1)
+    @assertEq(s.cursor.offset, 1)
+    // move right: '\n' -> line 1, col 0
+    s.handleInput(InputAction.move_right, 0)
+    @assertEq(s.cursor.line, 1)
+    @assertEq(s.cursor.col, 0)
+    @assertEq(s.cursor.offset, 2)
+}
+
+test "surface move up down clamps col" {
+    var s = Surface.init()
+    // "hello\nhi\nworld"
+    s.handleInput(InputAction.insert_char, 'h')
+    s.handleInput(InputAction.insert_char, 'e')
+    s.handleInput(InputAction.insert_char, 'l')
+    s.handleInput(InputAction.insert_char, 'l')
+    s.handleInput(InputAction.insert_char, 'o')
+    s.handleInput(InputAction.insert_char, '\n')
+    s.handleInput(InputAction.insert_char, 'h')
+    s.handleInput(InputAction.insert_char, 'i')
+    s.handleInput(InputAction.insert_char, '\n')
+    s.handleInput(InputAction.insert_char, 'w')
+    s.handleInput(InputAction.insert_char, 'o')
+    s.handleInput(InputAction.insert_char, 'r')
+    s.handleInput(InputAction.insert_char, 'l')
+    s.handleInput(InputAction.insert_char, 'd')
+    // cursor at line 2, col 5, offset 14
+    @assertEq(s.cursor.line, 2)
+    @assertEq(s.cursor.col, 5)
+    // move up — line 1 "hi" has len 2, clamp col to 2
+    s.handleInput(InputAction.move_up, 0)
+    @assertEq(s.cursor.line, 1)
+    @assertEq(s.cursor.col, 2)
+    @assertEq(s.cursor.offset, 8)
+    // move up — line 0 "hello" has len 5, col stays 2
+    s.handleInput(InputAction.move_up, 0)
+    @assertEq(s.cursor.line, 0)
+    @assertEq(s.cursor.col, 2)
+    @assertEq(s.cursor.offset, 2)
+}
+
+test "surface move line end" {
+    var s = Surface.init()
+    s.handleInput(InputAction.insert_char, 'h')
+    s.handleInput(InputAction.insert_char, 'e')
+    s.handleInput(InputAction.insert_char, 'l')
+    s.handleInput(InputAction.insert_char, 'l')
+    s.handleInput(InputAction.insert_char, 'o')
+    s.handleInput(InputAction.insert_char, '\n')
+    s.handleInput(InputAction.insert_char, 'h')
+    s.handleInput(InputAction.insert_char, 'i')
+    // cursor at line 1, col 2
+    // move to line start
+    s.handleInput(InputAction.move_line_start, 0)
+    @assertEq(s.cursor.col, 0)
+    @assertEq(s.cursor.offset, 6)
+    // move to line end
+    s.handleInput(InputAction.move_line_end, 0)
+    @assertEq(s.cursor.col, 2)
+    @assertEq(s.cursor.offset, 8)
+}
+
+test "surface move down from last line no-op" {
+    var s = Surface.init()
+    s.handleInput(InputAction.insert_char, 'a')
+    @assertEq(s.cursor.line, 0)
+    s.handleInput(InputAction.move_down, 0)
+    @assertEq(s.cursor.line, 0)
 }

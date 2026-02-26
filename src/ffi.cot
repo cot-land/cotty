@@ -1,0 +1,268 @@
+/// FFI export layer for libcotty.dylib.
+/// Ghostty-style opaque handles: cotty_app_t (pointer) and cotty_surface_t (index).
+/// Action queue for Cot→Swift communication (poll-drain model).
+
+import "app"
+import "surface"
+import "buffer"
+import "cursor"
+import "input"
+import "message"
+
+// ============================================================================
+// Globals
+// ============================================================================
+
+var g_app: App = undefined
+
+/// Action queue — one pending action, read by Swift after each call.
+var g_action_tag: i64 = 0
+var g_action_payload: i64 = 0
+var g_action_surface: i64 = -1
+
+const ACTION_NONE: i64 = 0
+const ACTION_QUIT: i64 = 1
+const ACTION_NEW_WINDOW: i64 = 2
+const ACTION_CLOSE_SURFACE: i64 = 3
+const ACTION_MARK_DIRTY: i64 = 4
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+/// Get a mutable pointer to a surface in the list by index.
+/// Same pointer math as List.get() but returns *Surface instead of copying.
+fn getSurfacePtr(idx: i64) *Surface {
+    return @intToPtr(*Surface, g_app.surfaces.items + idx * @sizeOf(Surface))
+}
+
+// ============================================================================
+// App lifecycle
+// ============================================================================
+
+/// Create and initialize the global app. Returns opaque app handle.
+export fn cotty_app_new() i64 {
+    g_app = App.init()
+    return @ptrToInt(&g_app)
+}
+
+/// Destroy the global app.
+export fn cotty_app_free(app: i64) void {
+    g_app.surfaces.free()
+    g_app.mailbox.free()
+}
+
+/// Run one tick — drains the mailbox.
+export fn cotty_app_tick(app: i64) void {
+    g_app.tick()
+}
+
+/// Return the number of open surfaces.
+export fn cotty_app_surface_count(app: i64) i64 {
+    return g_app.surfaces.count
+}
+
+/// Return 1 if the app is still running, 0 otherwise.
+export fn cotty_app_is_running(app: i64) i64 {
+    if (g_app.running) {
+        return 1
+    }
+    return 0
+}
+
+// ============================================================================
+// Action queue
+// ============================================================================
+
+/// Read and clear the pending action tag. Returns ACTION_NONE if empty.
+export fn cotty_app_next_action(app: i64) i64 {
+    const tag = g_action_tag
+    g_action_tag = ACTION_NONE
+    return tag
+}
+
+/// Read the payload of the last consumed action.
+export fn cotty_app_action_payload(app: i64) i64 {
+    return g_action_payload
+}
+
+/// Read the surface index of the last consumed action (-1 if none).
+export fn cotty_app_action_surface(app: i64) i64 {
+    return g_action_surface
+}
+
+// ============================================================================
+// Surface lifecycle
+// ============================================================================
+
+/// Create a new empty surface. Returns its index (the surface handle).
+export fn cotty_surface_new(app: i64) i64 {
+    return g_app.addSurface()
+}
+
+/// Remove a surface by index.
+export fn cotty_surface_free(surface: i64) void {
+    g_app.removeSurface(surface)
+}
+
+// ============================================================================
+// Surface input
+// ============================================================================
+
+/// Send a key event to a surface. Routes through keyToAction dispatch.
+export fn cotty_surface_key(surface: i64, key: i64, mods: i64) void {
+    const event = KeyEvent { key: key, mods: mods }
+    const action = keyToAction(event)
+
+    const ptr = getSurfacePtr(surface)
+
+    switch (action) {
+        InputAction.insert_char => {
+            // Tab → 4 spaces
+            if (key == 9) {
+                ptr.handleInput(InputAction.insert_char, ' ')
+                ptr.handleInput(InputAction.insert_char, ' ')
+                ptr.handleInput(InputAction.insert_char, ' ')
+                ptr.handleInput(InputAction.insert_char, ' ')
+            } else if (key == 13) {
+                // Enter → newline
+                ptr.handleInput(InputAction.insert_char, '\n')
+            } else {
+                ptr.handleInput(InputAction.insert_char, key)
+            }
+            g_action_tag = ACTION_MARK_DIRTY
+            g_action_surface = surface
+        },
+        InputAction.delete_back => {
+            ptr.handleInput(InputAction.delete_back, 0)
+            g_action_tag = ACTION_MARK_DIRTY
+            g_action_surface = surface
+        },
+        InputAction.delete_forward => {
+            ptr.handleInput(InputAction.delete_forward, 0)
+            g_action_tag = ACTION_MARK_DIRTY
+            g_action_surface = surface
+        },
+        InputAction.move_left => {
+            ptr.handleInput(InputAction.move_left, 0)
+        },
+        InputAction.move_right => {
+            ptr.handleInput(InputAction.move_right, 0)
+        },
+        InputAction.move_up => {
+            ptr.handleInput(InputAction.move_up, 0)
+        },
+        InputAction.move_down => {
+            ptr.handleInput(InputAction.move_down, 0)
+        },
+        InputAction.move_line_start => {
+            ptr.handleInput(InputAction.move_line_start, 0)
+        },
+        InputAction.move_line_end => {
+            ptr.handleInput(InputAction.move_line_end, 0)
+        },
+        InputAction.page_up => {
+            ptr.handleInput(InputAction.page_up, 0)
+        },
+        InputAction.page_down => {
+            ptr.handleInput(InputAction.page_down, 0)
+        },
+        InputAction.save => {
+            g_action_tag = ACTION_MARK_DIRTY
+            g_action_surface = surface
+        },
+        InputAction.quit => {
+            g_app.postMessage(Message.quit)
+            g_action_tag = ACTION_QUIT
+        },
+        InputAction.new_surface => {
+            g_action_tag = ACTION_NEW_WINDOW
+        },
+        InputAction.close_surface => {
+            g_action_tag = ACTION_CLOSE_SURFACE
+            g_action_surface = surface
+        },
+        else => {},
+    }
+}
+
+/// Insert raw UTF-8 bytes into a surface.
+export fn cotty_surface_text(surface: i64, ptr: *u8, len: i64) void {
+    const sptr = getSurfacePtr(surface)
+    var i: i64 = 0
+    while (i < len) {
+        const byte_ptr = @intToPtr(*u8, @ptrToInt(ptr) + i)
+        sptr.handleInput(InputAction.insert_char, byte_ptr.*)
+        i += 1
+    }
+    g_action_tag = ACTION_MARK_DIRTY
+    g_action_surface = surface
+}
+
+/// Load content into a surface, replacing existing buffer.
+export fn cotty_surface_load_content(surface: i64, ptr: *u8, len: i64) void {
+    const sptr = getSurfacePtr(surface)
+    // Reset surface to empty
+    sptr.buffer = Buffer.init()
+    sptr.cursor = Cursor.init()
+    sptr.dirty = false
+    // Insert content byte by byte
+    var i: i64 = 0
+    while (i < len) {
+        const byte_ptr = @intToPtr(*u8, @ptrToInt(ptr) + i)
+        sptr.handleInput(InputAction.insert_char, byte_ptr.*)
+        i += 1
+    }
+    // Reset cursor to start
+    sptr.cursor.offset = 0
+    sptr.cursor.line = 0
+    sptr.cursor.col = 0
+    sptr.dirty = false
+}
+
+// ============================================================================
+// Surface queries
+// ============================================================================
+
+export fn cotty_surface_buffer_len(surface: i64) i64 {
+    return getSurfacePtr(surface).buffer.len()
+}
+
+export fn cotty_surface_buffer_line_count(surface: i64) i64 {
+    return getSurfacePtr(surface).buffer.lineCount()
+}
+
+export fn cotty_surface_buffer_line_length(surface: i64, line: i64) i64 {
+    return getSurfacePtr(surface).buffer.lineLength(line)
+}
+
+export fn cotty_surface_buffer_line_start_offset(surface: i64, line: i64) i64 {
+    return getSurfacePtr(surface).buffer.lineStartOffset(line)
+}
+
+export fn cotty_surface_buffer_char_at(surface: i64, pos: i64) i64 {
+    return getSurfacePtr(surface).buffer.charAt(pos)
+}
+
+export fn cotty_surface_cursor_line(surface: i64) i64 {
+    return getSurfacePtr(surface).cursor.line
+}
+
+export fn cotty_surface_cursor_col(surface: i64) i64 {
+    return getSurfacePtr(surface).cursor.col
+}
+
+export fn cotty_surface_cursor_offset(surface: i64) i64 {
+    return getSurfacePtr(surface).cursor.offset
+}
+
+export fn cotty_surface_is_dirty(surface: i64) i64 {
+    if (getSurfacePtr(surface).dirty) {
+        return 1
+    }
+    return 0
+}
+
+export fn cotty_surface_set_clean(surface: i64) void {
+    getSurfacePtr(surface).dirty = false
+}

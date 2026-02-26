@@ -8,9 +8,22 @@ let package = Package(
         .macOS(.v13),
     ],
     targets: [
+        .target(
+            name: "CCottyCore",
+            path: "Sources/CCottyCore",
+            publicHeadersPath: "include"
+        ),
         .executableTarget(
             name: "Cotty",
-            path: "Sources/Cotty"
+            dependencies: ["CCottyCore"],
+            path: "Sources/Cotty",
+            linkerSettings: [
+                .unsafeFlags([
+                    "-L..",
+                    "-lcotty",
+                    "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../../../..",
+                ]),
+            ]
         ),
     ]
 )

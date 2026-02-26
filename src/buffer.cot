@@ -191,6 +191,44 @@ impl Buffer {
         return @string(result.items, result.count)
     }
 
+    /// Get the length of a specific line (0-indexed), not including newline.
+    fn lineLength(line_num: int) int {
+        var current_line = 0
+        var line_start = 0
+        var i = 0
+        const text_len = self.len()
+        while (i < text_len and current_line < line_num) {
+            if (self.charAt(i) == '\n') {
+                current_line += 1
+                line_start = i + 1
+            }
+            i += 1
+        }
+        if (current_line != line_num) { return 0 }
+        var line_end = line_start
+        while (line_end < text_len) {
+            if (self.charAt(line_end) == '\n') { break }
+            line_end += 1
+        }
+        return line_end - line_start
+    }
+
+    /// Get the byte offset of the start of a specific line (0-indexed).
+    fn lineStartOffset(line_num: int) int {
+        if (line_num == 0) { return 0 }
+        var current_line = 0
+        var i = 0
+        const text_len = self.len()
+        while (i < text_len) {
+            if (self.charAt(i) == '\n') {
+                current_line += 1
+                if (current_line == line_num) { return i + 1 }
+            }
+            i += 1
+        }
+        return self.len()
+    }
+
     /// Grow the gap when it's full. Doubles the gap size.
     fn growGap() void {
         const old_gap_size = self.gapSize()
@@ -337,4 +375,47 @@ test "buffer insert at beginning" {
     buf.moveGapTo(0)
     buf.insert('a')
     @assertEq(buf.toString(), "abc")
+}
+
+test "buffer line length single line" {
+    var buf = Buffer.initWithContent("hello")
+    @assertEq(buf.lineLength(0), 5)
+}
+
+test "buffer line length multi line" {
+    var buf = Buffer.initWithContent("hello\nworld\nfoo")
+    @assertEq(buf.lineLength(0), 5)
+    @assertEq(buf.lineLength(1), 5)
+    @assertEq(buf.lineLength(2), 3)
+}
+
+test "buffer line length empty line" {
+    var buf = Buffer.initWithContent("hello\n\nworld")
+    @assertEq(buf.lineLength(0), 5)
+    @assertEq(buf.lineLength(1), 0)
+    @assertEq(buf.lineLength(2), 5)
+}
+
+test "buffer line length out of range" {
+    var buf = Buffer.initWithContent("hello")
+    @assertEq(buf.lineLength(5), 0)
+}
+
+test "buffer line start offset" {
+    var buf = Buffer.initWithContent("hello\nworld\nfoo")
+    @assertEq(buf.lineStartOffset(0), 0)
+    @assertEq(buf.lineStartOffset(1), 6)
+    @assertEq(buf.lineStartOffset(2), 12)
+}
+
+test "buffer line start offset empty lines" {
+    var buf = Buffer.initWithContent("a\n\nb")
+    @assertEq(buf.lineStartOffset(0), 0)
+    @assertEq(buf.lineStartOffset(1), 2)
+    @assertEq(buf.lineStartOffset(2), 3)
+}
+
+test "buffer line start offset past end" {
+    var buf = Buffer.initWithContent("hello")
+    @assertEq(buf.lineStartOffset(5), 5)
 }

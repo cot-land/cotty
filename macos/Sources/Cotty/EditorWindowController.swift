@@ -3,6 +3,7 @@ import AppKit
 class EditorWindowController: NSWindowController, NSWindowDelegate, FileTreeDelegate {
     private(set) var editorView: EditorView!
     private(set) var filePath: URL?
+    let surface: CottySurface
     private var isDirty = false {
         didSet { updateTitle() }
     }
@@ -13,11 +14,12 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, FileTreeDele
 
     private static var cascadePoint = NSPoint.zero
 
-    convenience init() {
-        self.init(fileURL: nil)
+    convenience init(surface: CottySurface) {
+        self.init(surface: surface, fileURL: nil)
     }
 
-    init(fileURL: URL?) {
+    init(surface: CottySurface, fileURL: URL?) {
+        self.surface = surface
         self.filePath = fileURL
 
         let window = NSWindow(
@@ -52,7 +54,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, FileTreeDele
         ])
 
         // Editor
-        editorView = EditorView(frame: NSRect(x: 0, y: 0, width: 780, height: 600))
+        editorView = EditorView(frame: NSRect(x: 0, y: 0, width: 780, height: 600), surface: surface)
         editorView.windowController = self
 
         // Split view
@@ -99,7 +101,8 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, FileTreeDele
     private func loadFile(_ url: URL) {
         do {
             let content = try String(contentsOf: url, encoding: .utf8)
-            editorView.loadContent(content)
+            surface.loadContent(content)
+            editorView.resetScroll()
             filePath = url
             isDirty = false
         } catch {
@@ -126,9 +129,10 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, FileTreeDele
     }
 
     private func saveToFile(_ url: URL) {
-        let content = editorView.bufferContent()
+        let content = surface.bufferContent
         do {
             try content.write(to: url, atomically: true, encoding: .utf8)
+            surface.setClean()
             filePath = url
             isDirty = false
         } catch {
@@ -168,11 +172,11 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, FileTreeDele
     // MARK: - Tabs
 
     @objc func newTab(_ sender: Any) {
-        guard let currentWindow = window else { return }
-        let wc = EditorWindowController()
-        if let delegate = NSApp.delegate as? AppDelegate {
-            delegate.trackWindowController(wc)
-        }
+        guard let currentWindow = window,
+              let delegate = NSApp.delegate as? AppDelegate else { return }
+        let surface = delegate.cottyApp.createSurface()
+        let wc = EditorWindowController(surface: surface)
+        delegate.trackWindowController(wc)
         currentWindow.addTabbedWindow(wc.window!, ordered: .above)
         wc.window?.makeKeyAndOrderFront(nil)
     }
