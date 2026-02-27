@@ -77,10 +77,7 @@ impl Surface {
         }
     }
 
-    /// Create a terminal surface with grid only (shell spawned from Swift side).
-    /// Swift uses forkpty() which is fork-safe in a GUI app. Cot's Pty.spawn()
-    /// crashes because environ_count dereferences a shadowed _environ symbol
-    /// in dylib mode (compiler bug: local _environ function shadows libc global).
+    /// Create a terminal surface with a shell spawned via Cot's PTY.
     static fn initTerminal(rows: i64, cols: i64) Surface {
         return Surface {
             kind: SURFACE_TERMINAL,
@@ -91,7 +88,7 @@ impl Surface {
             dirty: false,
             terminal: TerminalState.init(rows, cols),
             parser: VtParser.init(),
-            shell: Pty { master_fd: -1, child_pid: -1 },
+            shell: Pty.spawn(rows, cols),
         }
     }
 

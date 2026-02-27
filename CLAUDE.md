@@ -11,6 +11,20 @@
 - **ALWAYS** identify the exact compiler limitation and report it to the user
 - The user will fix the Zig compiler. That is the correct workflow.
 
+## DO NOT PUT ANY LOGIC INTO SWIFT
+
+**SWIFT IS A THIN SHELL. ALL LOGIC LIVES IN COT.**
+
+Cotty is a dogfooding project. The ENTIRE POINT is to exercise the Cot language by writing real application logic in Cot. Swift exists ONLY as a platform binding layer — it calls Cot FFI functions and renders what Cot tells it to render. Nothing more.
+
+- **NO** implementing features in Swift that should be in Cot
+- **NO** Swift-side workarounds for Cot compiler bugs — fix the compiler instead
+- **NO** duplicating logic between Swift and Cot (PTY spawning, input handling, state management)
+- **NO** "temporary" Swift implementations — they become permanent tech debt
+- Swift may ONLY: create windows, set up Metal layers, forward raw input events to Cot, and render from Cot's data
+- If a Cot runtime function crashes in dylib mode, the fix goes in the Zig compiler, NOT in Swift
+- Every line of logic in Swift is a line that ISN'T dogfooding Cot
+
 ## CRITICAL RULES
 
 ### 1. Never Invent — Copy Ghostty/Zed Patterns

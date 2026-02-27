@@ -7,9 +7,9 @@ import QuartzCore
 /// NSView for terminal surfaces — renders the terminal grid via Metal and
 /// bridges keyboard input to the PTY.
 ///
-/// Shell spawning uses Swift's forkpty() (fork-safe in GUI apps). PTY output
-/// is fed through Cot's VT parser (cotty_terminal_feed) for terminal state
-/// updates, then rendered via Metal from the Cot cell grid.
+/// Shell is spawned by Cot's Pty.spawn() (in surface.cot). Swift monitors
+/// the PTY fd for output, feeds bytes through Cot's VT parser
+/// (cotty_terminal_feed), and renders the cell grid via Metal.
 class TerminalView: NSView {
     let surface: CottySurface
     weak var windowController: TerminalWindowController?
@@ -19,9 +19,7 @@ class TerminalView: NSView {
     private var renderer: MetalRenderer!
     private let metalView: MetalLayerView
 
-    // PTY I/O — spawned from Swift side via forkpty()
-    private var masterFd: Int32 = -1
-    private var childPid: pid_t = -1
+    // PTY I/O — fd owned by Cot's Pty struct
     private var readSource: DispatchSourceRead?
     private let readBuffer = UnsafeMutablePointer<UInt8>.allocate(capacity: 4096)
 
@@ -49,7 +47,6 @@ class TerminalView: NSView {
         readSource?.cancel()
         readBuffer.deallocate()
         blinkTimer?.invalidate()
-        if masterFd >= 0 { close(masterFd) }
     }
 
     private func setupViews() {
@@ -63,7 +60,7 @@ class TerminalView: NSView {
         guard let window else { return }
         metalView.metalLayer.contentsScale = window.backingScaleFactor
         updateDrawableSize()
-        spawnShell()
+        startPtyMonitor()
         startBlinkTimer()
         renderFrame()
     }
@@ -83,72 +80,45 @@ class TerminalView: NSView {
         )
     }
 
-    // MARK: - Shell Spawning (Swift-side forkpty)
-
-    private func spawnShell() {
-        let rows = surface.terminalRows
-        let cols = surface.terminalCols
-        guard rows > 0 && cols > 0 else { return }
-
-        var master: Int32 = -1
-        var winSize = winsize(
-            ws_row: UInt16(rows),
-            ws_col: UInt16(cols),
-            ws_xpixel: 0,
-            ws_ypixel: 0
-        )
-
-        let pid = forkpty(&master, nil, nil, &winSize)
-        if pid < 0 { return }
-
-        if pid == 0 {
-            // Child process — exec the shell
-            let shell = "/bin/zsh"
-            shell.withCString { path in
-                let argv: [UnsafeMutablePointer<CChar>?] = [
-                    strdup(path),
-                    nil
-                ]
-                execvp(path, argv)
-                _exit(127)
-            }
-        }
-
-        // Parent
-        masterFd = master
-        childPid = pid
-
-        // Set non-blocking
-        let flags = fcntl(master, F_GETFL)
-        _ = fcntl(master, F_SETFL, flags | O_NONBLOCK)
-
-        startPtyMonitor()
-    }
-
-    // MARK: - PTY Monitoring
+    // MARK: - PTY Monitoring (fd owned by Cot's Pty struct)
 
     private func startPtyMonitor() {
-        guard masterFd >= 0 else { return }
-
-        let fd = masterFd
+        let fd = surface.ptyFd
+        fputs("[TerminalView] ptyFd=\(fd) rows=\(surface.terminalRows) cols=\(surface.terminalCols)\n", stderr)
+        guard fd >= 0 else {
+            fputs("[TerminalView] ERROR: ptyFd < 0, Pty.spawn() failed\n", stderr)
+            return
+        }
+        // Ensure non-blocking (Cot's set_nonblocking may not work in dylib mode)
+        let flags = fcntl(fd, F_GETFL)
+        fcntl(fd, F_SETFL, flags | O_NONBLOCK)
+        fputs("[TerminalView] set nonblocking: flags=\(flags) -> \(flags | O_NONBLOCK)\n", stderr)
         let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: .main)
         source.setEventHandler { [weak self] in
+            fputs("[TerminalView] dispatch source fired\n", stderr)
             self?.readPty()
         }
         source.setCancelHandler { /* fd closed in deinit */ }
         source.resume()
         readSource = source
+        fputs("[TerminalView] dispatch source resumed on fd=\(fd)\n", stderr)
     }
 
     private func readPty() {
+        fputs("[readPty] ENTER fd=\(surface.ptyFd) handle=\(surface.handle)\n", stderr)
+        let fd = surface.ptyFd
+        var totalBytes = 0
         while true {
-            let n = Darwin.read(masterFd, readBuffer, 4096)
+            let n = Darwin.read(fd, readBuffer, 4096)
+            fputs("[readPty] read returned \(n)\n", stderr)
             if n <= 0 { break }
-            // Feed multi-byte chunk through Cot VT parser.
-            // The *Cell heap corruption bug is fixed (ARC managed flag),
-            // so Cot-side loops over cells are safe now.
-            surface.terminalFeed(readBuffer, length: n)
+            totalBytes += n
+            for i in 0..<n {
+                cotty_terminal_feed_byte(surface.handle, Int64(readBuffer[i]))
+            }
+            fputs("[readPty] fed \(n) bytes OK\n", stderr)
         }
+        fputs("[readPty] total=\(totalBytes) cursor=(\(surface.terminalCursorRow),\(surface.terminalCursorCol))\n", stderr)
         renderFrame()
     }
 
@@ -174,10 +144,10 @@ class TerminalView: NSView {
 
         let data = translateKeyToBytes(event)
         guard !data.isEmpty else { return }
-        // Write directly to the PTY master fd
+        let fd = surface.ptyFd
         data.withUnsafeBytes { buf in
             guard let ptr = buf.baseAddress else { return }
-            _ = Darwin.write(masterFd, ptr, data.count)
+            _ = Darwin.write(fd, ptr, data.count)
         }
         resetCursorBlink()
     }
