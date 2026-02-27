@@ -25,6 +25,19 @@ Cotty is a dogfooding project. The ENTIRE POINT is to exercise the Cot language 
 - If a Cot runtime function crashes in dylib mode, the fix goes in the Zig compiler, NOT in Swift
 - Every line of logic in Swift is a line that ISN'T dogfooding Cot
 
+## NEVER REVERT PROGRESS BECAUSE OF A COMPILER BUG
+
+When a feature works correctly but exposes a compiler bug (e.g., a missing runtime function, broken ABI, or dylib-mode issue), the correct response is:
+
+1. **Keep the working code exactly as written**
+2. **Document the compiler bug** in `~/cotlang/cot/claude/` with root cause and fix instructions
+3. **Tell the user** what compiler fix is needed so they can implement it
+4. **Wait for the fix**, then continue
+
+**NEVER** undo working feature code because a compiler limitation causes a cosmetic issue or partial failure. The whole point of this project is to push the compiler forward. Reverting progress defeats the purpose and destroys work.
+
+Example of what NOT to do: implementing terminal grid resize that works correctly, then reverting it to hardcoded 24x80 because `ioctl_winsize` has a bug in dylib mode. The resize code is correct — the compiler is wrong. Fix the compiler.
+
 ## CRITICAL RULES
 
 ### 1. Never Invent — Copy Ghostty/Zed Patterns

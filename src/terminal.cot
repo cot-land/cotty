@@ -22,10 +22,12 @@ const DEFAULT_BG_B: i64 = 34
 
 /// Flat grid of cells addressed by (row, col).
 /// Cells are stored contiguously in row-major order.
+/// row_wrap tracks soft-wrap state per row for resize reflow.
 struct TerminalGrid {
     cells: List(Cell),
     rows: i64,
     cols: i64,
+    row_wrap: List(i64),
 }
 
 impl TerminalGrid {
@@ -43,10 +45,21 @@ impl TerminalGrid {
             i += 1
         }
 
+        var wraps: List(i64) = undefined
+        wraps.items = 0
+        wraps.count = 0
+        wraps.capacity = 0
+        var w: i64 = 0
+        while (w < rows) {
+            wraps.append(0)
+            w += 1
+        }
+
         return TerminalGrid {
             cells: cells,
             rows: rows,
             cols: cols,
+            row_wrap: wraps,
         }
     }
 
@@ -54,6 +67,16 @@ impl TerminalGrid {
     fn getCell(row: i64, col: i64) *Cell {
         const idx = row * self.cols + col
         return @intToPtr(*Cell, self.cells.items + idx * @sizeOf(Cell))
+    }
+
+    /// Get the wrap flag for a row (1 = soft-wrapped into next row).
+    fn getRowWrap(row: i64) i64 {
+        return @intToPtr(*i64, self.row_wrap.items + row * @sizeOf(i64)).*
+    }
+
+    /// Set the wrap flag for a row (1 = soft-wrapped, 0 = hard break).
+    fn setRowWrap(row: i64, val: i64) void {
+        @intToPtr(*i64, self.row_wrap.items + row * @sizeOf(i64)).* = val
     }
 
     /// Clear the entire grid to default blank cells.
@@ -65,36 +88,39 @@ impl TerminalGrid {
         }
     }
 
-    /// Clear a single row to default blank cells.
+    /// Clear a single row to default blank cells and reset its wrap flag.
     fn clearLine(row: i64) void {
         var col: i64 = 0
         while (col < self.cols) {
             self.getCell(row, col).* = Cell.init()
             col += 1
         }
+        self.setRowWrap(row, 0)
     }
 
     /// Scroll the region [top..bottom] up by one line.
-    /// Content shifts up, bottom line is cleared with defaults.
+    /// Content and wrap flags shift up, bottom line is cleared with defaults.
     fn scrollUp(top: i64, bottom: i64) void {
         var row = top
         while (row < bottom) {
             const dst = self.cells.items + (row * self.cols) * @sizeOf(Cell)
             const src = self.cells.items + ((row + 1) * self.cols) * @sizeOf(Cell)
             memcpy(dst, src, self.cols * @sizeOf(Cell))
+            self.setRowWrap(row, self.getRowWrap(row + 1))
             row += 1
         }
         self.clearLine(bottom)
     }
 
     /// Scroll the region [top..bottom] down by one line.
-    /// Content shifts down, top line is cleared with defaults.
+    /// Content and wrap flags shift down, top line is cleared with defaults.
     fn scrollDown(top: i64, bottom: i64) void {
         var row = bottom
         while (row > top) {
             const dst = self.cells.items + (row * self.cols) * @sizeOf(Cell)
             const src = self.cells.items + ((row - 1) * self.cols) * @sizeOf(Cell)
             memcpy(dst, src, self.cols * @sizeOf(Cell))
+            self.setRowWrap(row, self.getRowWrap(row - 1))
             row -= 1
         }
         self.clearLine(top)
@@ -186,6 +212,7 @@ impl TerminalState {
     /// and the actual wrap (CR + LF) happens on the next printable character.
     fn putChar(cp: i64) void {
         if (self.pending_wrap) {
+            self.grid.setRowWrap(self.cursor_row, 1)
             self.cursor_col = 0
             self.cursor_row += 1
             if (self.cursor_row > self.scroll_bottom) {
@@ -219,6 +246,7 @@ impl TerminalState {
 
     /// Linefeed (LF): move cursor down one row, scroll if at bottom of region.
     fn newline() void {
+        self.grid.setRowWrap(self.cursor_row, 0)
         self.pending_wrap = false
         self.cursor_row += 1
         if (self.cursor_row > self.scroll_bottom) {
@@ -460,20 +488,17 @@ impl TerminalState {
 
     // -- Resize -------------------------------------------------------------
 
-    /// Resize the terminal to new dimensions, preserving visible content.
-    /// Resets scroll region and clamps cursor to new bounds.
-    fn resize(new_rows: i64, new_cols: i64) void {
-        var new_grid = TerminalGrid.init(new_rows, new_cols)
+    /// Resize rows only (no column change), preserving content and wrap flags.
+    fn resizeRowsOnly(new_rows: i64) void {
+        var new_grid = TerminalGrid.init(new_rows, self.grid.cols)
         const copy_rows = @min(self.grid.rows, new_rows)
-        const copy_cols = @min(self.grid.cols, new_cols)
 
         var row: i64 = 0
         while (row < copy_rows) {
-            var col: i64 = 0
-            while (col < copy_cols) {
-                new_grid.getCell(row, col).* = self.grid.getCell(row, col).*
-                col += 1
-            }
+            const dst = new_grid.cells.items + (row * self.grid.cols) * @sizeOf(Cell)
+            const src = self.grid.cells.items + (row * self.grid.cols) * @sizeOf(Cell)
+            memcpy(dst, src, self.grid.cols * @sizeOf(Cell))
+            new_grid.setRowWrap(row, self.grid.getRowWrap(row))
             row += 1
         }
 
@@ -481,7 +506,156 @@ impl TerminalState {
         self.scroll_top = 0
         self.scroll_bottom = new_rows - 1
         self.cursor_row = @min(self.cursor_row, new_rows - 1)
-        self.cursor_col = @min(self.cursor_col, new_cols - 1)
+        self.pending_wrap = false
+    }
+
+    /// Resize the terminal to new dimensions with content reflow.
+    /// Soft-wrapped lines are joined into logical lines and re-wrapped
+    /// to the new column width. Cursor position is tracked through reflow.
+    fn resize(new_rows: i64, new_cols: i64) void {
+        if (new_rows == self.grid.rows and new_cols == self.grid.cols) { return }
+        if (new_cols == self.grid.cols) {
+            self.resizeRowsOnly(new_rows)
+            return
+        }
+
+        // Temp storage for reflowed output
+        var out_cells: List(Cell) = undefined
+        out_cells.items = 0
+        out_cells.count = 0
+        out_cells.capacity = 0
+
+        var out_wraps: List(i64) = undefined
+        out_wraps.items = 0
+        out_wraps.count = 0
+        out_wraps.capacity = 0
+
+        var out_rows: i64 = 0
+        var new_cursor_row: i64 = 0
+        var new_cursor_col: i64 = 0
+
+        // Process each logical line (sequence of soft-wrapped rows)
+        var src_row: i64 = 0
+        while (src_row < self.grid.rows) {
+            // Find extent of this logical line
+            var line_start = src_row
+            while (src_row < self.grid.rows - 1 and self.grid.getRowWrap(src_row) == 1) {
+                src_row += 1
+            }
+            var line_end = src_row
+            src_row += 1
+
+            // Total cells in logical line
+            var total_cells = (line_end - line_start + 1) * self.grid.cols
+
+            // Trim trailing blank cells
+            var content_len = total_cells
+            while (content_len > 0) {
+                var idx = content_len - 1
+                var r = line_start + idx / self.grid.cols
+                var c = idx % self.grid.cols
+                var cell = self.grid.getCell(r, c)
+                if (cell.codepoint != 0 and cell.codepoint != ' ') {
+                    break
+                }
+                content_len -= 1
+            }
+
+            // Check if cursor is in this logical line
+            var cursor_in_line = (self.cursor_row >= line_start and self.cursor_row <= line_end)
+            var cursor_abs: i64 = 0
+            if (cursor_in_line) {
+                cursor_abs = (self.cursor_row - line_start) * self.grid.cols + self.cursor_col
+            }
+
+            // Number of output rows for this logical line
+            var num_out: i64 = 1
+            if (content_len > 0) {
+                num_out = (content_len + new_cols - 1) / new_cols
+            }
+
+            var first_out = out_rows
+
+            // Emit re-wrapped rows
+            var row_idx: i64 = 0
+            while (row_idx < num_out) {
+                var col: i64 = 0
+                while (col < new_cols) {
+                    var abs_idx = row_idx * new_cols + col
+                    if (abs_idx < total_cells) {
+                        var r = line_start + abs_idx / self.grid.cols
+                        var c = abs_idx % self.grid.cols
+                        out_cells.append(self.grid.getCell(r, c).*)
+                    } else {
+                        out_cells.append(Cell.init())
+                    }
+                    col += 1
+                }
+
+                if (row_idx < num_out - 1) {
+                    out_wraps.append(1)
+                } else {
+                    out_wraps.append(0)
+                }
+
+                out_rows += 1
+                row_idx += 1
+            }
+
+            // Map cursor position within this logical line
+            if (cursor_in_line) {
+                if (content_len == 0) {
+                    new_cursor_row = first_out
+                    new_cursor_col = @min(cursor_abs, new_cols - 1)
+                } else {
+                    var c_row = cursor_abs / new_cols
+                    var c_col = cursor_abs % new_cols
+                    if (c_row >= num_out) {
+                        c_row = num_out - 1
+                        c_col = new_cols - 1
+                    }
+                    new_cursor_row = first_out + c_row
+                    new_cursor_col = c_col
+                }
+            }
+        }
+
+        // Build new grid, keeping cursor visible at bottom of view
+        var new_grid = TerminalGrid.init(new_rows, new_cols)
+
+        var skip: i64 = 0
+        if (out_rows > new_rows) {
+            skip = new_cursor_row - new_rows + 1
+            if (skip < 0) { skip = 0 }
+            if (skip + new_rows > out_rows) { skip = out_rows - new_rows }
+        }
+
+        // Copy output rows into new grid
+        var dst_row: i64 = 0
+        var src_idx = skip
+        while (src_idx < out_rows and dst_row < new_rows) {
+            var col: i64 = 0
+            while (col < new_cols) {
+                var cell_idx = src_idx * new_cols + col
+                new_grid.getCell(dst_row, col).* = @intToPtr(*Cell, out_cells.items + cell_idx * @sizeOf(Cell)).*
+                col += 1
+            }
+            new_grid.setRowWrap(dst_row, @intToPtr(*i64, out_wraps.items + src_idx * @sizeOf(i64)).*)
+            dst_row += 1
+            src_idx += 1
+        }
+
+        // Adjust cursor for skipped rows
+        new_cursor_row -= skip
+        if (new_cursor_row < 0) { new_cursor_row = 0 }
+        if (new_cursor_row >= new_rows) { new_cursor_row = new_rows - 1 }
+        if (new_cursor_col >= new_cols) { new_cursor_col = new_cols - 1 }
+
+        self.grid = new_grid
+        self.cursor_row = new_cursor_row
+        self.cursor_col = new_cursor_col
+        self.scroll_top = 0
+        self.scroll_bottom = new_rows - 1
         self.pending_wrap = false
     }
 
@@ -1073,6 +1247,138 @@ test "resize shrink clamps cursor" {
     @assertEq(t.cursor_row, 9)
     @assertEq(t.cursor_col, 39)
     @assertEq(t.pending_wrap, false)
+}
+
+// ============================================================================
+// Tests — Resize reflow
+// ============================================================================
+
+test "reflow shrink wraps long line" {
+    // "ABCDEF" on a 6-col terminal, resize to 3 cols → 2 rows
+    var t = TerminalState.init(3, 6)
+    t.putChar('A')
+    t.putChar('B')
+    t.putChar('C')
+    t.putChar('D')
+    t.putChar('E')
+    t.putChar('F')
+    t.resize(3, 3)
+    @assertEq(t.grid.getCell(0, 0).codepoint, 'A')
+    @assertEq(t.grid.getCell(0, 1).codepoint, 'B')
+    @assertEq(t.grid.getCell(0, 2).codepoint, 'C')
+    @assertEq(t.grid.getCell(1, 0).codepoint, 'D')
+    @assertEq(t.grid.getCell(1, 1).codepoint, 'E')
+    @assertEq(t.grid.getCell(1, 2).codepoint, 'F')
+    @assertEq(t.grid.getRowWrap(0), 1)
+    @assertEq(t.grid.getRowWrap(1), 0)
+}
+
+test "reflow grow unwraps soft-wrapped line" {
+    // Write 8 chars on a 4-col terminal (soft-wraps to 2 rows), widen to 8 cols
+    var t = TerminalState.init(3, 4)
+    t.putChar('A')
+    t.putChar('B')
+    t.putChar('C')
+    t.putChar('D')
+    t.putChar('E')
+    t.putChar('F')
+    t.putChar('G')
+    t.putChar('H')
+    // Row 0: "ABCD" (wrap), Row 1: "EFGH"
+    @assertEq(t.grid.getRowWrap(0), 1)
+
+    t.resize(3, 8)
+    // Should unwrap into one row: "ABCDEFGH"
+    @assertEq(t.grid.getCell(0, 0).codepoint, 'A')
+    @assertEq(t.grid.getCell(0, 1).codepoint, 'B')
+    @assertEq(t.grid.getCell(0, 2).codepoint, 'C')
+    @assertEq(t.grid.getCell(0, 3).codepoint, 'D')
+    @assertEq(t.grid.getCell(0, 4).codepoint, 'E')
+    @assertEq(t.grid.getCell(0, 5).codepoint, 'F')
+    @assertEq(t.grid.getCell(0, 6).codepoint, 'G')
+    @assertEq(t.grid.getCell(0, 7).codepoint, 'H')
+    @assertEq(t.grid.getRowWrap(0), 0)
+}
+
+test "reflow preserves hard newlines" {
+    // Row 0: "AB" + LF, Row 1: "CD" — two logical lines
+    var t = TerminalState.init(3, 4)
+    t.putChar('A')
+    t.putChar('B')
+    t.newline()
+    t.carriageReturn()
+    t.putChar('C')
+    t.putChar('D')
+    @assertEq(t.grid.getRowWrap(0), 0)
+
+    t.resize(3, 8)
+    // Two separate logical lines, not joined
+    @assertEq(t.grid.getCell(0, 0).codepoint, 'A')
+    @assertEq(t.grid.getCell(0, 1).codepoint, 'B')
+    @assert(t.grid.getCell(0, 2).isBlank())
+    @assertEq(t.grid.getCell(1, 0).codepoint, 'C')
+    @assertEq(t.grid.getCell(1, 1).codepoint, 'D')
+}
+
+test "reflow cursor tracks through wrap" {
+    // 6 chars on 6-col, cursor at col 5, resize to 3 cols
+    var t = TerminalState.init(3, 6)
+    t.putChar('A')
+    t.putChar('B')
+    t.putChar('C')
+    t.putChar('D')
+    t.putChar('E')
+    t.putChar('F')
+    // cursor at (0, 5) with pending_wrap, but cursor_col is 5
+    t.setCursorPos(0, 5)
+    t.resize(3, 3)
+    // cursor_abs = 5, 5/3 = 1, 5%3 = 2 → row 1, col 2
+    @assertEq(t.cursor_row, 1)
+    @assertEq(t.cursor_col, 2)
+}
+
+test "reflow rows only preserves wrap flags" {
+    var t = TerminalState.init(3, 4)
+    t.putChar('A')
+    t.putChar('B')
+    t.putChar('C')
+    t.putChar('D')
+    t.putChar('E')
+    // Row 0 soft-wraps into row 1
+    @assertEq(t.grid.getRowWrap(0), 1)
+    t.resize(5, 4)
+    // Same cols → resizeRowsOnly path, wrap flag preserved
+    @assertEq(t.grid.getRowWrap(0), 1)
+    @assertEq(t.grid.getCell(0, 0).codepoint, 'A')
+    @assertEq(t.grid.getCell(1, 0).codepoint, 'E')
+}
+
+test "scrollUp shifts wrap flags" {
+    var g = TerminalGrid.init(3, 4)
+    g.getCell(0, 0).codepoint = 'A'
+    g.getCell(1, 0).codepoint = 'B'
+    g.getCell(2, 0).codepoint = 'C'
+    g.setRowWrap(0, 1)
+    g.setRowWrap(1, 0)
+    g.setRowWrap(2, 1)
+    g.scrollUp(0, 2)
+    @assertEq(g.getRowWrap(0), 0)
+    @assertEq(g.getRowWrap(1), 1)
+    @assertEq(g.getRowWrap(2), 0)
+}
+
+test "scrollDown shifts wrap flags" {
+    var g = TerminalGrid.init(3, 4)
+    g.getCell(0, 0).codepoint = 'A'
+    g.getCell(1, 0).codepoint = 'B'
+    g.getCell(2, 0).codepoint = 'C'
+    g.setRowWrap(0, 1)
+    g.setRowWrap(1, 0)
+    g.setRowWrap(2, 1)
+    g.scrollDown(0, 2)
+    @assertEq(g.getRowWrap(0), 0)
+    @assertEq(g.getRowWrap(1), 1)
+    @assertEq(g.getRowWrap(2), 0)
 }
 
 // ============================================================================

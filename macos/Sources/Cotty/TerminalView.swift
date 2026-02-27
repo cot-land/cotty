@@ -60,6 +60,7 @@ class TerminalView: NSView {
         guard let window else { return }
         metalView.metalLayer.contentsScale = window.backingScaleFactor
         updateDrawableSize()
+        resizeTerminalGrid(bounds.size)
         startPtyMonitor()
         startBlinkTimer()
         renderFrame()
@@ -67,6 +68,7 @@ class TerminalView: NSView {
 
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
+        resizeTerminalGrid(newSize)
         updateDrawableSize()
         renderFrame()
     }
@@ -78,6 +80,16 @@ class TerminalView: NSView {
             width: metalView.bounds.width * scale,
             height: metalView.bounds.height * scale
         )
+    }
+
+    private func resizeTerminalGrid(_ size: NSSize) {
+        guard renderer != nil else { return }
+        let pad = Theme.paddingPoints
+        let newCols = max(2, Int((size.width - 2 * pad) / renderer.cellWidthPoints))
+        let newRows = max(2, Int((size.height - 2 * pad) / renderer.cellHeightPoints))
+        if newRows != surface.terminalRows || newCols != surface.terminalCols {
+            surface.terminalResize(rows: newRows, cols: newCols)
+        }
     }
 
     // MARK: - PTY Monitoring (fd owned by Cot's Pty struct)

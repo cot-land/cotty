@@ -1,4 +1,5 @@
 import AppKit
+import CoreText
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     var cottyApp: CottyApp!
@@ -48,7 +49,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func newTerminal(_ sender: Any) {
-        let surface = cottyApp.createTerminalSurface(rows: 24, cols: 80)
+        // Compute grid size from window content rect so the shell spawns at
+        // the correct size (avoids a SIGWINCH race that shows zsh's '%' marker).
+        let contentSize = NSSize(width: 800, height: 500)
+        let scale = NSScreen.main?.backingScaleFactor ?? 2.0
+        let font = CTFontCreateWithName(Theme.fontName as CFString, Theme.fontSize * scale, nil)
+        let cellH = (ceil(CTFontGetAscent(font)) + ceil(CTFontGetDescent(font))
+                      + ceil(CTFontGetLeading(font))) / scale
+        var glyph: CGGlyph = 0
+        var adv = CGSize.zero
+        var ch: UniChar = 0x4D // 'M'
+        CTFontGetGlyphsForCharacters(font, &ch, &glyph, 1)
+        CTFontGetAdvancesForGlyphs(font, .horizontal, &glyph, &adv, 1)
+        let cellW = ceil(adv.width) / scale
+        let pad = Theme.paddingPoints
+        let cols = max(2, Int((contentSize.width - 2 * pad) / cellW))
+        let rows = max(2, Int((contentSize.height - 2 * pad) / cellH))
+
+        let surface = cottyApp.createTerminalSurface(rows: rows, cols: cols)
         let wc = TerminalWindowController(surface: surface)
         terminalWindowControllers.append(wc)
         wc.showWindow(nil)
