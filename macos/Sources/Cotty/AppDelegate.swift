@@ -3,6 +3,7 @@ import AppKit
 class AppDelegate: NSObject, NSApplicationDelegate {
     var cottyApp: CottyApp!
     private var windowControllers: [EditorWindowController] = []
+    private var terminalWindowControllers: [TerminalWindowController] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         cottyApp = CottyApp()
@@ -45,6 +46,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         windowControllers.removeAll { $0 === controller }
     }
 
+    @objc func newTerminal(_ sender: Any) {
+        let surface = cottyApp.createTerminalSurface(rows: 24, cols: 80)
+        let wc = TerminalWindowController(surface: surface)
+        terminalWindowControllers.append(wc)
+        wc.showWindow(nil)
+    }
+
+    func terminalWindowControllerDidClose(_ controller: TerminalWindowController) {
+        terminalWindowControllers.removeAll { $0 === controller }
+    }
+
     // MARK: - Menu Bar
 
     private func buildMenuBar() {
@@ -64,6 +76,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let fileMenu = NSMenu(title: "File")
         fileMenu.addItem(withTitle: "New Window", action: #selector(newDocument(_:)), keyEquivalent: "n")
         fileMenu.addItem(withTitle: "New Tab", action: #selector(EditorWindowController.newTab(_:)), keyEquivalent: "t")
+        let terminalItem = NSMenuItem(title: "New Terminal", action: #selector(newTerminal(_:)), keyEquivalent: "t")
+        terminalItem.keyEquivalentModifierMask = [.command, .shift]
+        fileMenu.addItem(terminalItem)
         fileMenu.addItem(.separator())
         fileMenu.addItem(withTitle: "Open...", action: #selector(openDocument(_:)), keyEquivalent: "o")
         let openFolderItem = NSMenuItem(title: "Open Folder...", action: #selector(EditorWindowController.openFolder(_:)), keyEquivalent: "o")

@@ -56,6 +56,14 @@ impl App {
         return idx
     }
 
+    /// Add a terminal surface with the given dimensions. Returns its index.
+    fn addTerminalSurface(rows: i64, cols: i64) int {
+        const idx = self.surfaces.count
+        self.surfaces.append(Surface.initTerminal(rows, cols))
+        self.focused_surface = idx
+        return idx
+    }
+
     /// Remove a surface by index.
     fn removeSurface(idx: int) void {
         if (idx < 0 or idx >= self.surfaces.count) { return }

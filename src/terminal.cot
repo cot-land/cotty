@@ -1,0 +1,913 @@
+/// Terminal grid and state: cell storage, cursor, scroll regions, SGR attributes.
+/// Modeled on Ghostty's Terminal.zig and Screen.zig.
+
+import "std/list"
+import "std/sys"
+import "cell"
+
+// ============================================================================
+// Default Colors (Monokai)
+// ============================================================================
+
+const DEFAULT_FG_R: i64 = 248
+const DEFAULT_FG_G: i64 = 248
+const DEFAULT_FG_B: i64 = 242
+const DEFAULT_BG_R: i64 = 39
+const DEFAULT_BG_G: i64 = 40
+const DEFAULT_BG_B: i64 = 34
+
+// ============================================================================
+// TerminalGrid — flat cell storage (rows * cols)
+// ============================================================================
+
+/// Flat grid of cells addressed by (row, col).
+/// Cells are stored contiguously in row-major order.
+struct TerminalGrid {
+    cells: List(Cell),
+    rows: i64,
+    cols: i64,
+}
+
+impl TerminalGrid {
+    /// Create a grid of rows * cols blank cells with default colors.
+    static fn init(rows: i64, cols: i64) TerminalGrid {
+        var cells: List(Cell) = undefined
+        cells.items = 0
+        cells.count = 0
+        cells.capacity = 0
+
+        var i: i64 = 0
+        const total = rows * cols
+        while (i < total) {
+            cells.append(Cell.init())
+            i += 1
+        }
+
+        return TerminalGrid {
+            cells: cells,
+            rows: rows,
+            cols: cols,
+        }
+    }
+
+    /// Get a pointer to the cell at (row, col).
+    fn getCell(row: i64, col: i64) *Cell {
+        const idx = row * self.cols + col
+        return @intToPtr(*Cell, self.cells.items + idx * @sizeOf(Cell))
+    }
+
+    /// Clear the entire grid to default blank cells.
+    fn clear() void {
+        var row: i64 = 0
+        while (row < self.rows) {
+            self.clearLine(row)
+            row += 1
+        }
+    }
+
+    /// Clear a single row to default blank cells.
+    fn clearLine(row: i64) void {
+        var col: i64 = 0
+        while (col < self.cols) {
+            self.getCell(row, col).* = Cell.init()
+            col += 1
+        }
+    }
+
+    /// Scroll the region [top..bottom] up by one line.
+    /// Content shifts up, bottom line is cleared with defaults.
+    fn scrollUp(top: i64, bottom: i64) void {
+        var row = top
+        while (row < bottom) {
+            const dst = self.cells.items + (row * self.cols) * @sizeOf(Cell)
+            const src = self.cells.items + ((row + 1) * self.cols) * @sizeOf(Cell)
+            memcpy(dst, src, self.cols * @sizeOf(Cell))
+            row += 1
+        }
+        self.clearLine(bottom)
+    }
+
+    /// Scroll the region [top..bottom] down by one line.
+    /// Content shifts down, top line is cleared with defaults.
+    fn scrollDown(top: i64, bottom: i64) void {
+        var row = bottom
+        while (row > top) {
+            const dst = self.cells.items + (row * self.cols) * @sizeOf(Cell)
+            const src = self.cells.items + ((row - 1) * self.cols) * @sizeOf(Cell)
+            memcpy(dst, src, self.cols * @sizeOf(Cell))
+            row -= 1
+        }
+        self.clearLine(top)
+    }
+
+    /// Insert count blank lines at row, shifting content down within [row..bottom].
+    fn insertLines(row: i64, count: i64, bottom: i64) void {
+        var i: i64 = 0
+        while (i < count) {
+            self.scrollDown(row, bottom)
+            i += 1
+        }
+    }
+
+    /// Delete count lines at row, shifting content up within [row..bottom].
+    fn deleteLines(row: i64, count: i64, bottom: i64) void {
+        var i: i64 = 0
+        while (i < count) {
+            self.scrollUp(row, bottom)
+            i += 1
+        }
+    }
+}
+
+// ============================================================================
+// TerminalState — cursor, attributes, scroll region, pending wrap
+// ============================================================================
+
+/// Full terminal state: grid + cursor + SGR attributes + scroll region.
+/// Implements VT100/ANSI escape sequence semantics including deferred wrapping.
+struct TerminalState {
+    grid: TerminalGrid,
+    cursor_row: i64,
+    cursor_col: i64,
+    saved_row: i64,
+    saved_col: i64,
+    pending_wrap: bool,
+    fg_r: i64,
+    fg_g: i64,
+    fg_b: i64,
+    bg_r: i64,
+    bg_g: i64,
+    bg_b: i64,
+    bold: bool,
+    scroll_top: i64,
+    scroll_bottom: i64,
+    pty_fd: i64,
+    child_pid: i64,
+}
+
+impl TerminalState {
+    /// Create a terminal with the given dimensions and default state.
+    static fn init(rows: i64, cols: i64) TerminalState {
+        return TerminalState {
+            grid: TerminalGrid.init(rows, cols),
+            cursor_row: 0,
+            cursor_col: 0,
+            saved_row: 0,
+            saved_col: 0,
+            pending_wrap: false,
+            fg_r: DEFAULT_FG_R,
+            fg_g: DEFAULT_FG_G,
+            fg_b: DEFAULT_FG_B,
+            bg_r: DEFAULT_BG_R,
+            bg_g: DEFAULT_BG_G,
+            bg_b: DEFAULT_BG_B,
+            bold: false,
+            scroll_top: 0,
+            scroll_bottom: rows - 1,
+            pty_fd: -1,
+            child_pid: -1,
+        }
+    }
+
+    // -- Character output ---------------------------------------------------
+
+    /// Write a character at the cursor position with current SGR attributes.
+    /// Wrapping is deferred: reaching the last column sets pending_wrap,
+    /// and the actual wrap (CR + LF) happens on the next printable character.
+    fn putChar(cp: i64) void {
+        if (self.pending_wrap) {
+            self.cursor_col = 0
+            self.cursor_row += 1
+            if (self.cursor_row > self.scroll_bottom) {
+                self.grid.scrollUp(self.scroll_top, self.scroll_bottom)
+                self.cursor_row = self.scroll_bottom
+            }
+            self.pending_wrap = false
+        }
+
+        const c = self.grid.getCell(self.cursor_row, self.cursor_col)
+        c.codepoint = cp
+        c.fg_r = self.fg_r
+        c.fg_g = self.fg_g
+        c.fg_b = self.fg_b
+        c.bg_r = self.bg_r
+        c.bg_g = self.bg_g
+        c.bg_b = self.bg_b
+        c.flags = 0
+        if (self.bold) {
+            c.flags = c.flags | CELL_BOLD
+        }
+
+        if (self.cursor_col >= self.grid.cols - 1) {
+            self.pending_wrap = true
+        } else {
+            self.cursor_col += 1
+        }
+    }
+
+    // -- C0 control characters ----------------------------------------------
+
+    /// Linefeed (LF): move cursor down one row, scroll if at bottom of region.
+    fn newline() void {
+        self.pending_wrap = false
+        self.cursor_row += 1
+        if (self.cursor_row > self.scroll_bottom) {
+            self.grid.scrollUp(self.scroll_top, self.scroll_bottom)
+            self.cursor_row = self.scroll_bottom
+        }
+    }
+
+    /// Carriage return (CR): move cursor to column 0.
+    fn carriageReturn() void {
+        self.pending_wrap = false
+        self.cursor_col = 0
+    }
+
+    /// Backspace (BS): move cursor left by one column.
+    fn backspace() void {
+        self.pending_wrap = false
+        if (self.cursor_col > 0) {
+            self.cursor_col -= 1
+        }
+    }
+
+    /// Horizontal tab (HT): advance to the next 8-column tab stop.
+    fn tab() void {
+        self.pending_wrap = false
+        self.cursor_col = (self.cursor_col / 8 + 1) * 8
+        if (self.cursor_col >= self.grid.cols) {
+            self.cursor_col = self.grid.cols - 1
+        }
+    }
+
+    // -- Cursor movement (CSI A/B/C/D/H) -----------------------------------
+
+    /// Move cursor up by count rows, clamped to scroll region top (CSI A).
+    fn cursorUp(count: i64) void {
+        self.pending_wrap = false
+        self.cursor_row -= count
+        if (self.cursor_row < self.scroll_top) {
+            self.cursor_row = self.scroll_top
+        }
+    }
+
+    /// Move cursor down by count rows, clamped to scroll region bottom (CSI B).
+    fn cursorDown(count: i64) void {
+        self.pending_wrap = false
+        self.cursor_row += count
+        if (self.cursor_row > self.scroll_bottom) {
+            self.cursor_row = self.scroll_bottom
+        }
+    }
+
+    /// Move cursor right by count columns, clamped to last column (CSI C).
+    fn cursorRight(count: i64) void {
+        self.pending_wrap = false
+        self.cursor_col += count
+        if (self.cursor_col >= self.grid.cols) {
+            self.cursor_col = self.grid.cols - 1
+        }
+    }
+
+    /// Move cursor left by count columns, clamped to column 0 (CSI D).
+    fn cursorLeft(count: i64) void {
+        self.pending_wrap = false
+        self.cursor_col -= count
+        if (self.cursor_col < 0) {
+            self.cursor_col = 0
+        }
+    }
+
+    /// Set absolute cursor position (0-indexed), clamped to grid bounds (CSI H).
+    fn setCursorPos(row: i64, col: i64) void {
+        self.pending_wrap = false
+        self.cursor_row = @max(0, @min(row, self.grid.rows - 1))
+        self.cursor_col = @max(0, @min(col, self.grid.cols - 1))
+    }
+
+    // -- Scroll region (CSI r) ----------------------------------------------
+
+    /// Set vertical scroll region (0-indexed, inclusive).
+    /// Moves cursor to origin after setting the region.
+    fn setScrollingRegion(top: i64, bottom: i64) void {
+        var t = top
+        var b = bottom
+        if (t < 0) { t = 0 }
+        if (b >= self.grid.rows) { b = self.grid.rows - 1 }
+        if (t >= b) { return }
+        self.scroll_top = t
+        self.scroll_bottom = b
+        self.setCursorPos(0, 0)
+    }
+
+    // -- Erase operations (CSI J/K) -----------------------------------------
+
+    /// Erase in display: 0 = below cursor, 1 = above cursor, 2 = entire screen.
+    fn eraseInDisplay(mode: i64) void {
+        self.pending_wrap = false
+        if (mode == 0) {
+            var col = self.cursor_col
+            while (col < self.grid.cols) {
+                self.grid.getCell(self.cursor_row, col).* = Cell.init()
+                col += 1
+            }
+            var row = self.cursor_row + 1
+            while (row < self.grid.rows) {
+                self.grid.clearLine(row)
+                row += 1
+            }
+        } else if (mode == 1) {
+            var row: i64 = 0
+            while (row < self.cursor_row) {
+                self.grid.clearLine(row)
+                row += 1
+            }
+            var col: i64 = 0
+            while (col <= self.cursor_col) {
+                self.grid.getCell(self.cursor_row, col).* = Cell.init()
+                col += 1
+            }
+        } else if (mode == 2) {
+            self.grid.clear()
+        }
+    }
+
+    /// Erase in line: 0 = right of cursor, 1 = left of cursor, 2 = entire line.
+    fn eraseInLine(mode: i64) void {
+        self.pending_wrap = false
+        if (mode == 0) {
+            var col = self.cursor_col
+            while (col < self.grid.cols) {
+                self.grid.getCell(self.cursor_row, col).* = Cell.init()
+                col += 1
+            }
+        } else if (mode == 1) {
+            var col: i64 = 0
+            while (col <= self.cursor_col) {
+                self.grid.getCell(self.cursor_row, col).* = Cell.init()
+                col += 1
+            }
+        } else if (mode == 2) {
+            self.grid.clearLine(self.cursor_row)
+        }
+    }
+
+    // -- Index / scroll (IND, RI) -------------------------------------------
+
+    /// Index: move cursor down, scroll up if at bottom of scroll region.
+    fn index_() void {
+        self.pending_wrap = false
+        if (self.cursor_row == self.scroll_bottom) {
+            self.grid.scrollUp(self.scroll_top, self.scroll_bottom)
+        } else if (self.cursor_row < self.grid.rows - 1) {
+            self.cursor_row += 1
+        }
+    }
+
+    /// Reverse index: move cursor up, scroll down if at top of scroll region.
+    fn reverseIndex() void {
+        self.pending_wrap = false
+        if (self.cursor_row == self.scroll_top) {
+            self.grid.scrollDown(self.scroll_top, self.scroll_bottom)
+        } else if (self.cursor_row > 0) {
+            self.cursor_row -= 1
+        }
+    }
+
+    // -- Insert / delete (CSI @, CSI P) -------------------------------------
+
+    /// Insert count blank cells at cursor, shifting existing cells right (CSI @).
+    fn insertBlanks(count: i64) void {
+        self.pending_wrap = false
+        const row = self.cursor_row
+        const col = self.cursor_col
+        const n = @min(count, self.grid.cols - col)
+
+        // Shift cells right (iterate right-to-left to handle overlap)
+        var c = self.grid.cols - 1
+        while (c >= col + n) {
+            self.grid.getCell(row, c).* = self.grid.getCell(row, c - n).*
+            c -= 1
+        }
+
+        // Fill inserted positions with blank cells
+        var i: i64 = 0
+        while (i < n) {
+            self.grid.getCell(row, col + i).* = Cell.init()
+            i += 1
+        }
+    }
+
+    /// Delete count cells at cursor, shifting remaining cells left (CSI P).
+    fn deleteChars(count: i64) void {
+        self.pending_wrap = false
+        const row = self.cursor_row
+        const col = self.cursor_col
+        const n = @min(count, self.grid.cols - col)
+
+        // Shift cells left (iterate left-to-right to handle overlap)
+        var c = col
+        while (c < self.grid.cols - n) {
+            self.grid.getCell(row, c).* = self.grid.getCell(row, c + n).*
+            c += 1
+        }
+
+        // Clear vacated cells at end of line
+        c = self.grid.cols - n
+        while (c < self.grid.cols) {
+            self.grid.getCell(row, c).* = Cell.init()
+            c += 1
+        }
+    }
+
+    // -- Save / restore cursor (DECSC, DECRC) -------------------------------
+
+    /// Save cursor position (DECSC).
+    fn saveCursor() void {
+        self.saved_row = self.cursor_row
+        self.saved_col = self.cursor_col
+    }
+
+    /// Restore cursor position (DECRC).
+    fn restoreCursor() void {
+        self.pending_wrap = false
+        self.cursor_row = self.saved_row
+        self.cursor_col = self.saved_col
+    }
+
+    // -- SGR attributes -----------------------------------------------------
+
+    /// Reset all SGR attributes to defaults.
+    fn resetAttributes() void {
+        self.fg_r = DEFAULT_FG_R
+        self.fg_g = DEFAULT_FG_G
+        self.fg_b = DEFAULT_FG_B
+        self.bg_r = DEFAULT_BG_R
+        self.bg_g = DEFAULT_BG_G
+        self.bg_b = DEFAULT_BG_B
+        self.bold = false
+    }
+
+    // -- Resize -------------------------------------------------------------
+
+    /// Resize the terminal to new dimensions, preserving visible content.
+    /// Resets scroll region and clamps cursor to new bounds.
+    fn resize(new_rows: i64, new_cols: i64) void {
+        var new_grid = TerminalGrid.init(new_rows, new_cols)
+        const copy_rows = @min(self.grid.rows, new_rows)
+        const copy_cols = @min(self.grid.cols, new_cols)
+
+        var row: i64 = 0
+        while (row < copy_rows) {
+            var col: i64 = 0
+            while (col < copy_cols) {
+                new_grid.getCell(row, col).* = self.grid.getCell(row, col).*
+                col += 1
+            }
+            row += 1
+        }
+
+        self.grid = new_grid
+        self.scroll_top = 0
+        self.scroll_bottom = new_rows - 1
+        self.cursor_row = @min(self.cursor_row, new_rows - 1)
+        self.cursor_col = @min(self.cursor_col, new_cols - 1)
+        self.pending_wrap = false
+    }
+}
+
+// ============================================================================
+// Tests — Grid
+// ============================================================================
+
+test "grid init" {
+    var g = TerminalGrid.init(24, 80)
+    @assertEq(g.rows, 24)
+    @assertEq(g.cols, 80)
+    @assertEq(g.cells.count, 1920)
+}
+
+test "grid getCell read write" {
+    var g = TerminalGrid.init(3, 4)
+    const c = g.getCell(1, 2)
+    @assert(c.isBlank())
+    c.codepoint = 'X'
+    @assertEq(g.getCell(1, 2).codepoint, 'X')
+}
+
+test "grid clear" {
+    var g = TerminalGrid.init(3, 4)
+    g.getCell(0, 0).codepoint = 'A'
+    g.getCell(2, 3).codepoint = 'Z'
+    g.clear()
+    @assert(g.getCell(0, 0).isBlank())
+    @assert(g.getCell(2, 3).isBlank())
+}
+
+test "grid clearLine leaves other rows" {
+    var g = TerminalGrid.init(3, 4)
+    g.getCell(0, 0).codepoint = 'K'
+    g.getCell(1, 0).codepoint = 'A'
+    g.getCell(1, 3).codepoint = 'Z'
+    g.clearLine(1)
+    @assert(g.getCell(1, 0).isBlank())
+    @assert(g.getCell(1, 3).isBlank())
+    @assertEq(g.getCell(0, 0).codepoint, 'K')
+}
+
+test "grid scrollUp shifts content" {
+    var g = TerminalGrid.init(3, 4)
+    g.getCell(0, 0).codepoint = 'A'
+    g.getCell(1, 0).codepoint = 'B'
+    g.getCell(2, 0).codepoint = 'C'
+    g.scrollUp(0, 2)
+    @assertEq(g.getCell(0, 0).codepoint, 'B')
+    @assertEq(g.getCell(1, 0).codepoint, 'C')
+    @assert(g.getCell(2, 0).isBlank())
+}
+
+test "grid scrollUp preserves default colors" {
+    var g = TerminalGrid.init(3, 4)
+    g.getCell(0, 0).codepoint = 'A'
+    g.scrollUp(0, 2)
+    @assertEq(g.getCell(2, 0).fg_r, DEFAULT_FG_R)
+    @assertEq(g.getCell(2, 0).bg_r, DEFAULT_BG_R)
+}
+
+test "grid scrollDown shifts content" {
+    var g = TerminalGrid.init(3, 4)
+    g.getCell(0, 0).codepoint = 'A'
+    g.getCell(1, 0).codepoint = 'B'
+    g.getCell(2, 0).codepoint = 'C'
+    g.scrollDown(0, 2)
+    @assert(g.getCell(0, 0).isBlank())
+    @assertEq(g.getCell(1, 0).codepoint, 'A')
+    @assertEq(g.getCell(2, 0).codepoint, 'B')
+}
+
+// ============================================================================
+// Tests — State: character output
+// ============================================================================
+
+test "putChar basic" {
+    var t = TerminalState.init(24, 80)
+    t.putChar('H')
+    t.putChar('i')
+    @assertEq(t.cursor_col, 2)
+    @assertEq(t.grid.getCell(0, 0).codepoint, 'H')
+    @assertEq(t.grid.getCell(0, 1).codepoint, 'i')
+}
+
+test "putChar applies SGR attributes" {
+    var t = TerminalState.init(24, 80)
+    t.fg_r = 255
+    t.fg_g = 0
+    t.fg_b = 0
+    t.bold = true
+    t.putChar('X')
+    const c = t.grid.getCell(0, 0)
+    @assertEq(c.fg_r, 255)
+    @assertEq(c.fg_g, 0)
+    @assertEq(c.flags & CELL_BOLD, CELL_BOLD)
+}
+
+test "putChar deferred wrap at last column" {
+    var t = TerminalState.init(3, 4)
+    t.putChar('A')
+    t.putChar('B')
+    t.putChar('C')
+    t.putChar('D')
+    // Cursor stays at last column with pending wrap
+    @assertEq(t.cursor_col, 3)
+    @assertEq(t.pending_wrap, true)
+    // Next character triggers the deferred wrap
+    t.putChar('E')
+    @assertEq(t.cursor_row, 1)
+    @assertEq(t.cursor_col, 1)
+    @assertEq(t.grid.getCell(1, 0).codepoint, 'E')
+    @assertEq(t.pending_wrap, false)
+}
+
+test "putChar wrap scrolls at bottom" {
+    var t = TerminalState.init(3, 4)
+    t.cursor_row = 2
+    t.putChar('A')
+    t.putChar('B')
+    t.putChar('C')
+    t.putChar('D')
+    // pending_wrap is set at end of last row
+    @assertEq(t.pending_wrap, true)
+    t.putChar('E')
+    // Should have scrolled: cursor still on row 2
+    @assertEq(t.cursor_row, 2)
+    @assertEq(t.grid.getCell(2, 0).codepoint, 'E')
+}
+
+// ============================================================================
+// Tests — State: C0 controls
+// ============================================================================
+
+test "newline moves down" {
+    var t = TerminalState.init(24, 80)
+    t.putChar('A')
+    t.newline()
+    @assertEq(t.cursor_row, 1)
+    // LF only moves down, does not reset column (VT100)
+    @assertEq(t.cursor_col, 1)
+}
+
+test "newline scrolls at bottom" {
+    var t = TerminalState.init(3, 4)
+    t.cursor_row = 2
+    t.putChar('X')
+    t.newline()
+    @assertEq(t.cursor_row, 2)
+    @assert(t.grid.getCell(0, 0).isBlank())
+}
+
+test "carriageReturn resets column" {
+    var t = TerminalState.init(24, 80)
+    t.putChar('A')
+    t.putChar('B')
+    t.carriageReturn()
+    @assertEq(t.cursor_col, 0)
+    @assertEq(t.pending_wrap, false)
+}
+
+test "backspace clamps at zero" {
+    var t = TerminalState.init(24, 80)
+    t.putChar('A')
+    t.putChar('B')
+    t.backspace()
+    @assertEq(t.cursor_col, 1)
+    t.backspace()
+    @assertEq(t.cursor_col, 0)
+    t.backspace()
+    @assertEq(t.cursor_col, 0)
+}
+
+test "tab advances to next stop" {
+    var t = TerminalState.init(24, 80)
+    t.tab()
+    @assertEq(t.cursor_col, 8)
+    t.putChar('A')
+    t.tab()
+    @assertEq(t.cursor_col, 16)
+}
+
+// ============================================================================
+// Tests — State: cursor movement
+// ============================================================================
+
+test "cursorUp clamps at scroll top" {
+    var t = TerminalState.init(24, 80)
+    t.cursor_row = 5
+    t.cursorUp(3)
+    @assertEq(t.cursor_row, 2)
+    t.cursorUp(100)
+    @assertEq(t.cursor_row, 0)
+}
+
+test "cursorDown clamps at scroll bottom" {
+    var t = TerminalState.init(24, 80)
+    t.cursorDown(10)
+    @assertEq(t.cursor_row, 10)
+    t.cursorDown(100)
+    @assertEq(t.cursor_row, 23)
+}
+
+test "cursorRight clamps at last column" {
+    var t = TerminalState.init(24, 80)
+    t.cursorRight(10)
+    @assertEq(t.cursor_col, 10)
+    t.cursorRight(100)
+    @assertEq(t.cursor_col, 79)
+}
+
+test "cursorLeft clamps at zero" {
+    var t = TerminalState.init(24, 80)
+    t.cursor_col = 10
+    t.cursorLeft(3)
+    @assertEq(t.cursor_col, 7)
+    t.cursorLeft(100)
+    @assertEq(t.cursor_col, 0)
+}
+
+test "setCursorPos clamps to bounds" {
+    var t = TerminalState.init(24, 80)
+    t.setCursorPos(5, 10)
+    @assertEq(t.cursor_row, 5)
+    @assertEq(t.cursor_col, 10)
+    t.setCursorPos(100, 200)
+    @assertEq(t.cursor_row, 23)
+    @assertEq(t.cursor_col, 79)
+}
+
+test "setCursorPos clears pending wrap" {
+    var t = TerminalState.init(3, 4)
+    t.putChar('A')
+    t.putChar('B')
+    t.putChar('C')
+    t.putChar('D')
+    @assertEq(t.pending_wrap, true)
+    t.setCursorPos(0, 0)
+    @assertEq(t.pending_wrap, false)
+}
+
+// ============================================================================
+// Tests — State: scroll region
+// ============================================================================
+
+test "setScrollingRegion" {
+    var t = TerminalState.init(24, 80)
+    t.cursor_row = 10
+    t.cursor_col = 40
+    t.setScrollingRegion(5, 20)
+    @assertEq(t.scroll_top, 5)
+    @assertEq(t.scroll_bottom, 20)
+    // Cursor moves to origin after setting region
+    @assertEq(t.cursor_row, 0)
+    @assertEq(t.cursor_col, 0)
+}
+
+test "cursorUp respects scroll region" {
+    var t = TerminalState.init(24, 80)
+    t.setScrollingRegion(5, 20)
+    t.setCursorPos(7, 0)
+    t.cursorUp(100)
+    @assertEq(t.cursor_row, 5)
+}
+
+// ============================================================================
+// Tests — State: erase operations
+// ============================================================================
+
+test "eraseInDisplay all" {
+    var t = TerminalState.init(3, 4)
+    t.putChar('A')
+    t.putChar('B')
+    t.eraseInDisplay(2)
+    @assert(t.grid.getCell(0, 0).isBlank())
+    @assert(t.grid.getCell(0, 1).isBlank())
+}
+
+test "eraseInDisplay below" {
+    var t = TerminalState.init(3, 4)
+    t.putChar('A')
+    t.putChar('B')
+    t.putChar('C')
+    t.putChar('D')
+    t.newline()
+    t.carriageReturn()
+    t.putChar('E')
+    t.putChar('F')
+    // Cursor at (1, 2), erase from cursor to end
+    t.eraseInDisplay(0)
+    @assertEq(t.grid.getCell(0, 0).codepoint, 'A')
+    @assertEq(t.grid.getCell(1, 0).codepoint, 'E')
+    @assertEq(t.grid.getCell(1, 1).codepoint, 'F')
+    @assert(t.grid.getCell(1, 2).isBlank())
+    @assert(t.grid.getCell(2, 0).isBlank())
+}
+
+test "eraseInLine right" {
+    var t = TerminalState.init(3, 4)
+    t.putChar('A')
+    t.putChar('B')
+    t.putChar('C')
+    t.putChar('D')
+    t.setCursorPos(0, 2)
+    t.eraseInLine(0)
+    @assertEq(t.grid.getCell(0, 0).codepoint, 'A')
+    @assertEq(t.grid.getCell(0, 1).codepoint, 'B')
+    @assert(t.grid.getCell(0, 2).isBlank())
+    @assert(t.grid.getCell(0, 3).isBlank())
+}
+
+test "eraseInLine left" {
+    var t = TerminalState.init(3, 4)
+    t.putChar('A')
+    t.putChar('B')
+    t.putChar('C')
+    t.putChar('D')
+    t.setCursorPos(0, 2)
+    t.eraseInLine(1)
+    @assert(t.grid.getCell(0, 0).isBlank())
+    @assert(t.grid.getCell(0, 1).isBlank())
+    @assert(t.grid.getCell(0, 2).isBlank())
+    @assertEq(t.grid.getCell(0, 3).codepoint, 'D')
+}
+
+// ============================================================================
+// Tests — State: index / reverse index
+// ============================================================================
+
+test "index moves down" {
+    var t = TerminalState.init(3, 4)
+    t.cursor_row = 1
+    t.index_()
+    @assertEq(t.cursor_row, 2)
+}
+
+test "index at bottom scrolls" {
+    var t = TerminalState.init(3, 4)
+    t.cursor_row = 2
+    t.grid.getCell(0, 0).codepoint = 'A'
+    t.index_()
+    @assertEq(t.cursor_row, 2)
+    @assert(t.grid.getCell(0, 0).isBlank())
+}
+
+test "reverseIndex at top scrolls" {
+    var t = TerminalState.init(3, 4)
+    t.grid.getCell(0, 0).codepoint = 'A'
+    t.reverseIndex()
+    @assertEq(t.cursor_row, 0)
+    @assertEq(t.grid.getCell(1, 0).codepoint, 'A')
+}
+
+// ============================================================================
+// Tests — State: insert / delete
+// ============================================================================
+
+test "insertBlanks shifts cells right" {
+    var t = TerminalState.init(3, 6)
+    t.putChar('A')
+    t.putChar('B')
+    t.putChar('C')
+    t.putChar('D')
+    t.setCursorPos(0, 1)
+    t.insertBlanks(2)
+    @assertEq(t.grid.getCell(0, 0).codepoint, 'A')
+    @assert(t.grid.getCell(0, 1).isBlank())
+    @assert(t.grid.getCell(0, 2).isBlank())
+    @assertEq(t.grid.getCell(0, 3).codepoint, 'B')
+    @assertEq(t.grid.getCell(0, 4).codepoint, 'C')
+    @assertEq(t.grid.getCell(0, 5).codepoint, 'D')
+}
+
+test "deleteChars shifts cells left" {
+    var t = TerminalState.init(3, 6)
+    t.putChar('A')
+    t.putChar('B')
+    t.putChar('C')
+    t.putChar('D')
+    t.putChar('E')
+    t.putChar('F')
+    t.setCursorPos(0, 1)
+    t.deleteChars(2)
+    @assertEq(t.grid.getCell(0, 0).codepoint, 'A')
+    @assertEq(t.grid.getCell(0, 1).codepoint, 'D')
+    @assertEq(t.grid.getCell(0, 2).codepoint, 'E')
+    @assertEq(t.grid.getCell(0, 3).codepoint, 'F')
+    @assert(t.grid.getCell(0, 4).isBlank())
+    @assert(t.grid.getCell(0, 5).isBlank())
+}
+
+// ============================================================================
+// Tests — State: save/restore, attributes, resize
+// ============================================================================
+
+test "saveCursor restoreCursor" {
+    var t = TerminalState.init(24, 80)
+    t.setCursorPos(5, 10)
+    t.saveCursor()
+    t.setCursorPos(0, 0)
+    t.restoreCursor()
+    @assertEq(t.cursor_row, 5)
+    @assertEq(t.cursor_col, 10)
+}
+
+test "resetAttributes restores defaults" {
+    var t = TerminalState.init(3, 4)
+    t.fg_r = 255
+    t.fg_g = 0
+    t.fg_b = 0
+    t.bold = true
+    t.resetAttributes()
+    @assertEq(t.fg_r, DEFAULT_FG_R)
+    @assertEq(t.fg_g, DEFAULT_FG_G)
+    @assertEq(t.fg_b, DEFAULT_FG_B)
+    @assertEq(t.bold, false)
+}
+
+test "resize preserves content" {
+    var t = TerminalState.init(3, 4)
+    t.putChar('A')
+    t.putChar('B')
+    t.resize(5, 6)
+    @assertEq(t.grid.rows, 5)
+    @assertEq(t.grid.cols, 6)
+    @assertEq(t.grid.getCell(0, 0).codepoint, 'A')
+    @assertEq(t.grid.getCell(0, 1).codepoint, 'B')
+    @assertEq(t.scroll_bottom, 4)
+}
+
+test "resize shrink clamps cursor" {
+    var t = TerminalState.init(24, 80)
+    t.setCursorPos(20, 70)
+    t.resize(10, 40)
+    @assertEq(t.cursor_row, 9)
+    @assertEq(t.cursor_col, 39)
+    @assertEq(t.pending_wrap, false)
+}

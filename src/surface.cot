@@ -1,4 +1,4 @@
-/// Editor surface: a single editor view with buffer, cursor, and viewport.
+/// Surface: a single view — either a text editor or a terminal emulator.
 /// Maps to Ghostty's Surface.zig.
 
 import "std/os"
@@ -7,47 +7,91 @@ import "std/string"
 import "buffer"
 import "cursor"
 import "input"
+import "terminal"
+import "vt_parser"
+import "pty"
 
-/// A single editor surface (tab/window).
+// ============================================================================
+// Surface Kind
+// ============================================================================
+
+const SURFACE_EDITOR: i64 = 0
+const SURFACE_TERMINAL: i64 = 1
+
+/// A single surface (tab/window).
 struct Surface {
+    kind: i64,
     buffer: Buffer,
     cursor: Cursor,
     scroll_offset: int,
     filepath: ?string,
     dirty: bool,
+    terminal: TerminalState,
+    parser: VtParser,
+    shell: Pty,
 }
 
 impl Surface {
-    /// Create an empty, untitled surface.
+    /// Create an empty, untitled editor surface.
     static fn init() Surface {
         return Surface {
-            buffer:Buffer.init(),
-            cursor:Cursor.init(),
+            kind: SURFACE_EDITOR,
+            buffer: Buffer.init(),
+            cursor: Cursor.init(),
             scroll_offset: 0,
             filepath: null,
             dirty: false,
+            terminal: TerminalState.init(0, 0),
+            parser: VtParser.init(),
+            shell: Pty { master_fd: -1, child_pid: -1 },
         }
     }
 
-    /// Create a surface from a file path.
+    /// Create an editor surface from a file path.
     static fn initFromFile(path: string) Surface {
         const content = readFile(path) catch {
             // File doesn't exist yet — create empty surface with path
             return Surface {
-                buffer:Buffer.init(),
-                cursor:Cursor.init(),
+                kind: SURFACE_EDITOR,
+                buffer: Buffer.init(),
+                cursor: Cursor.init(),
                 scroll_offset: 0,
                 filepath: path,
                 dirty: false,
+                terminal: TerminalState.init(0, 0),
+                parser: VtParser.init(),
+                shell: Pty { master_fd: -1, child_pid: -1 },
             }
         }
 
         return Surface {
-            buffer:Buffer.initWithContent(content),
-            cursor:Cursor.init(),
+            kind: SURFACE_EDITOR,
+            buffer: Buffer.initWithContent(content),
+            cursor: Cursor.init(),
             scroll_offset: 0,
             filepath: path,
             dirty: false,
+            terminal: TerminalState.init(0, 0),
+            parser: VtParser.init(),
+            shell: Pty { master_fd: -1, child_pid: -1 },
+        }
+    }
+
+    /// Create a terminal surface with grid only (shell spawned from Swift side).
+    /// Swift uses forkpty() which is fork-safe in a GUI app. Cot's Pty.spawn()
+    /// crashes because environ_count dereferences a shadowed _environ symbol
+    /// in dylib mode (compiler bug: local _environ function shadows libc global).
+    static fn initTerminal(rows: i64, cols: i64) Surface {
+        return Surface {
+            kind: SURFACE_TERMINAL,
+            buffer: Buffer.init(),
+            cursor: Cursor.init(),
+            scroll_offset: 0,
+            filepath: null,
+            dirty: false,
+            terminal: TerminalState.init(rows, cols),
+            parser: VtParser.init(),
+            shell: Pty { master_fd: -1, child_pid: -1 },
         }
     }
 
@@ -175,8 +219,16 @@ impl Surface {
         return self.buffer.toString()
     }
 
-    /// Return the title for this surface (filename or "untitled").
+    /// Returns true if this surface is a terminal emulator.
+    fn isTerminal() bool {
+        return self.kind == SURFACE_TERMINAL
+    }
+
+    /// Return the title for this surface.
     fn title() string {
+        if (self.kind == SURFACE_TERMINAL) {
+            return "terminal"
+        }
         if (self.filepath) |path| {
             return path
         }
@@ -190,11 +242,13 @@ impl Surface {
 
 test "surface init empty" {
     var s = Surface.init()
+    @assertEq(s.kind, SURFACE_EDITOR)
     @assertEq(s.buffer.len(), 0)
     @assertEq(s.cursor.line, 0)
     @assertEq(s.cursor.col, 0)
     @assertEq(s.dirty, false)
     @assertEq(s.title(), "untitled")
+    @assert(!s.isTerminal())
 }
 
 test "surface handle insert" {
@@ -358,4 +412,22 @@ test "surface move down from last line no-op" {
     @assertEq(s.cursor.line, 0)
     s.handleInput(InputAction.move_down, 0)
     @assertEq(s.cursor.line, 0)
+}
+
+test "terminal surface kind" {
+    var s = Surface.initTerminal(24, 80)
+    @assertEq(s.kind, SURFACE_TERMINAL)
+    @assert(s.isTerminal())
+    @assertEq(s.title(), "terminal")
+    @assertEq(s.terminal.grid.rows, 24)
+    @assertEq(s.terminal.grid.cols, 80)
+    s.shell.close()
+}
+
+test "editor surface has inactive terminal" {
+    var s = Surface.init()
+    @assertEq(s.kind, SURFACE_EDITOR)
+    @assertEq(s.terminal.grid.rows, 0)
+    @assertEq(s.terminal.grid.cols, 0)
+    @assertEq(s.shell.master_fd, -1)
 }

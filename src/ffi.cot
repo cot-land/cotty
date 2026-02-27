@@ -8,6 +8,10 @@ import "buffer"
 import "cursor"
 import "input"
 import "message"
+import "terminal"
+import "cell"
+import "vt_parser"
+import "pty"
 
 // ============================================================================
 // Globals
@@ -265,4 +269,140 @@ export fn cotty_surface_is_dirty(surface: i64) i64 {
 
 export fn cotty_surface_set_clean(surface: i64) void {
     getSurfacePtr(surface).dirty = false
+}
+
+// ============================================================================
+// Surface kind
+// ============================================================================
+
+/// Return the surface kind: 0 = editor, 1 = terminal.
+export fn cotty_surface_kind(surface: i64) i64 {
+    return getSurfacePtr(surface).kind
+}
+
+// ============================================================================
+// Terminal surface lifecycle
+// ============================================================================
+
+/// Create a new terminal surface with a shell. Returns its index.
+export fn cotty_terminal_surface_new(app: i64, rows: i64, cols: i64) i64 {
+    return g_app.addTerminalSurface(rows, cols)
+}
+
+/// Close the PTY and remove a terminal surface.
+export fn cotty_terminal_surface_free(surface: i64) void {
+    getSurfacePtr(surface).shell.close()
+    g_app.removeSurface(surface)
+}
+
+// ============================================================================
+// Terminal I/O
+// ============================================================================
+
+/// Write raw bytes to the terminal's PTY (sends input to the shell).
+export fn cotty_terminal_write(surface: i64, ptr: *u8, len: i64) void {
+    const sptr = getSurfacePtr(surface)
+    fd_write(sptr.shell.master_fd, @ptrToInt(ptr), len)
+}
+
+/// Read available bytes from the terminal's PTY into buf.
+/// Returns bytes read, 0 on EOF, negative on error/EAGAIN.
+export fn cotty_terminal_read(surface: i64, ptr: *u8, len: i64) i64 {
+    const sptr = getSurfacePtr(surface)
+    return fd_read(sptr.shell.master_fd, @ptrToInt(ptr), len)
+}
+
+/// Resize the terminal grid and PTY to new dimensions.
+export fn cotty_terminal_resize(surface: i64, rows: i64, cols: i64) void {
+    const sptr = getSurfacePtr(surface)
+    sptr.terminal.resize(rows, cols)
+    sptr.shell.resize(rows, cols)
+}
+
+/// Feed raw bytes through the VT parser into the terminal state.
+/// Call this after cotty_terminal_read to process shell output.
+export fn cotty_terminal_feed(surface: i64, ptr: *u8, len: i64) void {
+    const sptr = getSurfacePtr(surface)
+    var i: i64 = 0
+    while (i < len) {
+        const b = @intToPtr(*u8, @ptrToInt(ptr) + i).*
+        sptr.parser.feed(sptr.terminal, b)
+        i += 1
+    }
+}
+
+/// Feed a single byte through the VT parser.
+/// Avoids Cot-side loop that triggers *Cell heap corruption.
+export fn cotty_terminal_feed_byte(surface: i64, b: i64) void {
+    const sptr = getSurfacePtr(surface)
+    sptr.parser.feed(sptr.terminal, b)
+}
+
+// ============================================================================
+// Terminal grid queries
+// ============================================================================
+
+/// Return the number of rows in the terminal grid.
+export fn cotty_terminal_rows(surface: i64) i64 {
+    return getSurfacePtr(surface).terminal.grid.rows
+}
+
+/// Return the number of columns in the terminal grid.
+export fn cotty_terminal_cols(surface: i64) i64 {
+    return getSurfacePtr(surface).terminal.grid.cols
+}
+
+/// Return the codepoint of the cell at (row, col).
+export fn cotty_terminal_cell_codepoint(surface: i64, row: i64, col: i64) i64 {
+    return getSurfacePtr(surface).terminal.grid.getCell(row, col).codepoint
+}
+
+/// Return the foreground color of the cell at (row, col) as packed RGB.
+/// Format: (r << 16) | (g << 8) | b
+export fn cotty_terminal_cell_fg(surface: i64, row: i64, col: i64) i64 {
+    const c = getSurfacePtr(surface).terminal.grid.getCell(row, col)
+    return (c.fg_r << 16) | (c.fg_g << 8) | c.fg_b
+}
+
+/// Return the background color of the cell at (row, col) as packed RGB.
+/// Format: (r << 16) | (g << 8) | b
+export fn cotty_terminal_cell_bg(surface: i64, row: i64, col: i64) i64 {
+    const c = getSurfacePtr(surface).terminal.grid.getCell(row, col)
+    return (c.bg_r << 16) | (c.bg_g << 8) | c.bg_b
+}
+
+/// Return the flags of the cell at (row, col).
+export fn cotty_terminal_cell_flags(surface: i64, row: i64, col: i64) i64 {
+    return getSurfacePtr(surface).terminal.grid.getCell(row, col).flags
+}
+
+// ============================================================================
+// Terminal cursor queries
+// ============================================================================
+
+/// Return the terminal cursor row.
+export fn cotty_terminal_cursor_row(surface: i64) i64 {
+    return getSurfacePtr(surface).terminal.cursor_row
+}
+
+/// Return the terminal cursor column.
+export fn cotty_terminal_cursor_col(surface: i64) i64 {
+    return getSurfacePtr(surface).terminal.cursor_col
+}
+
+/// Return the PTY master fd (for polling with kqueue/epoll).
+export fn cotty_terminal_pty_fd(surface: i64) i64 {
+    return getSurfacePtr(surface).shell.master_fd
+}
+
+/// Return the child PID of the terminal's shell process.
+export fn cotty_terminal_child_pid(surface: i64) i64 {
+    return getSurfacePtr(surface).shell.child_pid
+}
+
+/// Return a pointer to the raw cells buffer for direct access from Swift.
+/// Each cell is 8 contiguous i64 fields: codepoint, fg_r, fg_g, fg_b, bg_r, bg_g, bg_b, flags.
+/// Stride per cell = 8 * 8 = 64 bytes. Total cells = rows * cols.
+export fn cotty_terminal_cells_ptr(surface: i64) i64 {
+    return getSurfacePtr(surface).terminal.grid.cells.items
 }

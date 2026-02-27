@@ -1,0 +1,137 @@
+/// PTY management: spawn a shell process attached to a pseudo-terminal.
+/// Modeled on Ghostty's pty.zig and Command.zig.
+
+import "std/sys"
+import "std/process"
+
+/// Unpack the master fd from openpty()/pipe() packed result.
+fn masterFd(fds: i64) i64 {
+    return fds & 4294967295
+}
+
+/// Unpack the slave fd from openpty() packed result.
+fn slaveFd(fds: i64) i64 {
+    return (fds >> 32) & 4294967295
+}
+
+/// A pseudo-terminal pair: master fd for I/O, child process id.
+struct Pty {
+    master_fd: i64,
+    child_pid: i64,
+}
+
+impl Pty {
+    /// Spawn a shell in a new PTY with the given grid dimensions.
+    ///
+    /// Opens a pseudo-terminal pair, forks a child process, and execs
+    /// /bin/zsh with the slave PTY as stdin/stdout/stderr. The parent
+    /// keeps the master fd for reading and writing.
+    ///
+    /// Returns a Pty with master_fd = -1 on failure.
+    static fn spawn(rows: i64, cols: i64) Pty {
+        const fds = openpty()
+        if (fds < 0) {
+            return Pty { master_fd: -1, child_pid: -1 }
+        }
+        const master = masterFd(fds)
+        const slave = slaveFd(fds)
+
+        // Set initial terminal size before fork so child inherits it
+        ioctl_winsize(slave, rows, cols)
+
+        // Pre-allocate everything BEFORE fork. After fork() in a
+        // multi-threaded process (macOS GUI app), malloc is not safe
+        // in the child — other threads may hold locks that are copied
+        // as locked. Only async-signal-safe functions (exec, dup2,
+        // close, setsid) are allowed in the child.
+        const shell = "/bin/zsh"
+        const path = buildPath(shell)
+        const argv = argvBuild1(shell)
+        const envp = buildEnvp()
+
+        const pid = fork()
+        if (pid < 0) {
+            fd_close(master)
+            fd_close(slave)
+            return Pty { master_fd: -1, child_pid: -1 }
+        }
+
+        if (pid == 0) {
+            // -- Child process --
+            // Only async-signal-safe calls here (no malloc/alloc).
+            fd_close(master)
+            setsid()
+            dup2(slave, 0)
+            dup2(slave, 1)
+            dup2(slave, 2)
+            if (slave > 2) {
+                fd_close(slave)
+            }
+            execve(path, argv, envp)
+            exit(127)
+        }
+
+        // -- Parent process --
+        fd_close(slave)
+        set_nonblocking(master)
+
+        return Pty { master_fd: master, child_pid: pid }
+    }
+
+    /// Write a string to the PTY master (sends input to the shell).
+    fn writeBytes(data: string) i64 {
+        return fd_write(self.master_fd, @ptrOf(data), @lenOf(data))
+    }
+
+    /// Read up to len bytes from the PTY master into buf.
+    /// Returns bytes read, 0 on EOF, or negative on error/EAGAIN.
+    fn readInto(buf: i64, len: i64) i64 {
+        return fd_read(self.master_fd, buf, len)
+    }
+
+    /// Resize the PTY to new grid dimensions.
+    /// Sends TIOCSWINSZ ioctl so the child process receives SIGWINCH.
+    fn resize(rows: i64, cols: i64) void {
+        ioctl_winsize(self.master_fd, rows, cols)
+    }
+
+    /// Close the PTY master fd.
+    fn close() void {
+        if (self.master_fd >= 0) {
+            fd_close(self.master_fd)
+            self.master_fd = -1
+        }
+    }
+
+    /// Returns true if the PTY was successfully opened.
+    fn isValid() bool {
+        return self.master_fd >= 0
+    }
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+test "fd packing round-trip" {
+    // Simulate openpty() result: master=3, slave=4
+    const fds: i64 = 3 | (4 << 32)
+    @assertEq(masterFd(fds), 3)
+    @assertEq(slaveFd(fds), 4)
+}
+
+test "fd packing large values" {
+    // Test with realistic fd numbers
+    const fds: i64 = 42 | (43 << 32)
+    @assertEq(masterFd(fds), 42)
+    @assertEq(slaveFd(fds), 43)
+}
+
+test "spawn creates valid pty" {
+    var pty = Pty.spawn(24, 80)
+    @assert(pty.isValid())
+    @assert(pty.master_fd >= 0)
+    @assert(pty.child_pid > 0)
+    pty.close()
+    @assert(!pty.isValid())
+}

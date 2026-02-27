@@ -29,6 +29,10 @@ final class CottyApp {
         CottySurface(app: self, handle: cotty_surface_new(handle))
     }
 
+    func createTerminalSurface(rows: Int, cols: Int) -> CottySurface {
+        CottySurface(app: self, handle: cotty_terminal_surface_new(handle, Int64(rows), Int64(cols)))
+    }
+
     /// Poll the action queue. Returns nil if no action pending.
     func nextAction() -> (tag: Int64, payload: Int64, surface: Int64)? {
         let tag = cotty_app_next_action(handle)
