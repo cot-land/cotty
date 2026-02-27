@@ -143,6 +143,11 @@ struct TerminalState {
     scroll_bottom: i64,
     pty_fd: i64,
     child_pid: i64,
+    sel_active: bool,
+    sel_start_row: i64,
+    sel_start_col: i64,
+    sel_end_row: i64,
+    sel_end_col: i64,
 }
 
 impl TerminalState {
@@ -166,6 +171,11 @@ impl TerminalState {
             scroll_bottom: rows - 1,
             pty_fd: -1,
             child_pid: -1,
+            sel_active: false,
+            sel_start_row: 0,
+            sel_start_col: 0,
+            sel_end_row: 0,
+            sel_end_col: 0,
         }
     }
 
@@ -473,6 +483,159 @@ impl TerminalState {
         self.cursor_row = @min(self.cursor_row, new_rows - 1)
         self.cursor_col = @min(self.cursor_col, new_cols - 1)
         self.pending_wrap = false
+    }
+
+    // -- Selection --------------------------------------------------------------
+
+    /// Begin a new selection at (row, col). Marks selection active.
+    fn selectionStart(row: i64, col: i64) void {
+        self.sel_active = true
+        self.sel_start_row = row
+        self.sel_start_col = col
+        self.sel_end_row = row
+        self.sel_end_col = col
+        self.markSelection()
+    }
+
+    /// Update the selection endpoint to (row, col) and recompute flags.
+    fn selectionUpdate(row: i64, col: i64) void {
+        self.sel_end_row = row
+        self.sel_end_col = col
+        self.markSelection()
+    }
+
+    /// Clear the selection and remove all CELL_SELECTED flags.
+    fn selectionClear() void {
+        self.sel_active = false
+        self.clearSelectionFlags()
+    }
+
+    /// Remove CELL_SELECTED flag from every cell in the grid.
+    fn clearSelectionFlags() void {
+        var r: i64 = 0
+        while (r < self.grid.rows) {
+            var c: i64 = 0
+            while (c < self.grid.cols) {
+                const cell = self.grid.getCell(r, c)
+                if ((cell.flags & CELL_SELECTED) != 0) {
+                    cell.flags = cell.flags - CELL_SELECTED
+                }
+                c += 1
+            }
+            r += 1
+        }
+    }
+
+    /// Recompute CELL_SELECTED flags on the grid based on current selection.
+    fn markSelection() void {
+        self.clearSelectionFlags()
+        if (!self.sel_active) { return }
+
+        // Normalize: ensure (sr,sc) <= (er,ec) lexicographically
+        var sr = self.sel_start_row
+        var sc = self.sel_start_col
+        var er = self.sel_end_row
+        var ec = self.sel_end_col
+        if (sr > er or (sr == er and sc > ec)) {
+            const tr = sr
+            const tc = sc
+            sr = er
+            sc = ec
+            er = tr
+            ec = tc
+        }
+
+        // Clamp to grid bounds
+        if (sr < 0) { sr = 0 }
+        if (er >= self.grid.rows) { er = self.grid.rows - 1 }
+
+        var row = sr
+        while (row <= er) {
+            var col_start: i64 = 0
+            var col_end = self.grid.cols - 1
+
+            if (row == sr) { col_start = sc }
+            if (row == er) { col_end = ec }
+
+            // Clamp columns
+            if (col_start < 0) { col_start = 0 }
+            if (col_end >= self.grid.cols) { col_end = self.grid.cols - 1 }
+
+            var col = col_start
+            while (col <= col_end) {
+                self.grid.getCell(row, col).flags = self.grid.getCell(row, col).flags | CELL_SELECTED
+                col += 1
+            }
+            row += 1
+        }
+    }
+
+    /// Write selected text into a byte buffer. Returns number of bytes written.
+    /// Codepoints are written as single bytes (ASCII). Rows separated by newlines.
+    /// Trailing spaces on each row are trimmed.
+    fn writeSelectedText(buf_ptr: i64, buf_cap: i64) i64 {
+        if (!self.sel_active) { return 0 }
+
+        // Normalize
+        var sr = self.sel_start_row
+        var sc = self.sel_start_col
+        var er = self.sel_end_row
+        var ec = self.sel_end_col
+        if (sr > er or (sr == er and sc > ec)) {
+            const tr = sr
+            const tc = sc
+            sr = er
+            sc = ec
+            er = tr
+            ec = tc
+        }
+
+        if (sr < 0) { sr = 0 }
+        if (er >= self.grid.rows) { er = self.grid.rows - 1 }
+
+        var pos: i64 = 0
+        var row = sr
+        while (row <= er) {
+            var col_start: i64 = 0
+            var col_end = self.grid.cols - 1
+
+            if (row == sr) { col_start = sc }
+            if (row == er) { col_end = ec }
+
+            if (col_start < 0) { col_start = 0 }
+            if (col_end >= self.grid.cols) { col_end = self.grid.cols - 1 }
+
+            // Find last non-blank column in this row's selection range
+            var last_nonblank = col_start - 1
+            var scan = col_start
+            while (scan <= col_end) {
+                const cp = self.grid.getCell(row, scan).codepoint
+                if (cp != 0 and cp != ' ') {
+                    last_nonblank = scan
+                }
+                scan += 1
+            }
+
+            // Write characters up to last non-blank
+            var col = col_start
+            while (col <= last_nonblank) {
+                if (pos >= buf_cap) { return pos }
+                var cp = self.grid.getCell(row, col).codepoint
+                if (cp == 0) { cp = ' ' }
+                @intToPtr(*u8, buf_ptr + pos).* = @intCast(u8, cp)
+                pos += 1
+                col += 1
+            }
+
+            // Add newline between rows (not after last)
+            if (row < er) {
+                if (pos >= buf_cap) { return pos }
+                @intToPtr(*u8, buf_ptr + pos).* = @intCast(u8, '\n')
+                pos += 1
+            }
+            row += 1
+        }
+        return pos
     }
 }
 
@@ -910,4 +1073,80 @@ test "resize shrink clamps cursor" {
     @assertEq(t.cursor_row, 9)
     @assertEq(t.cursor_col, 39)
     @assertEq(t.pending_wrap, false)
+}
+
+// ============================================================================
+// Tests — Selection
+// ============================================================================
+
+test "selection marks and clears flags" {
+    var t = TerminalState.init(3, 4)
+    t.putChar('A')
+    t.putChar('B')
+    t.putChar('C')
+    t.putChar('D')
+    t.newline()
+    t.carriageReturn()
+    t.putChar('E')
+    t.putChar('F')
+
+    // Select from (0,1) to (0,3)
+    t.selectionStart(0, 1)
+    t.selectionUpdate(0, 3)
+    @assertEq((t.grid.getCell(0, 0).flags & CELL_SELECTED), 0)
+    @assertEq((t.grid.getCell(0, 1).flags & CELL_SELECTED), CELL_SELECTED)
+    @assertEq((t.grid.getCell(0, 2).flags & CELL_SELECTED), CELL_SELECTED)
+    @assertEq((t.grid.getCell(0, 3).flags & CELL_SELECTED), CELL_SELECTED)
+    @assertEq((t.grid.getCell(1, 0).flags & CELL_SELECTED), 0)
+
+    // Clear selection
+    t.selectionClear()
+    @assertEq((t.grid.getCell(0, 1).flags & CELL_SELECTED), 0)
+    @assertEq((t.grid.getCell(0, 2).flags & CELL_SELECTED), 0)
+    @assertEq(t.sel_active, false)
+}
+
+test "selection across rows and text extraction" {
+    var t = TerminalState.init(3, 4)
+    // Row 0: "ABCD"
+    t.putChar('A')
+    t.putChar('B')
+    t.putChar('C')
+    t.putChar('D')
+    // Row 1: "EF"
+    t.newline()
+    t.carriageReturn()
+    t.putChar('E')
+    t.putChar('F')
+
+    // Select from (0,2) to (1,1)
+    t.selectionStart(0, 2)
+    t.selectionUpdate(1, 1)
+
+    // Row 0: cols 2-3 selected, Row 1: cols 0-1 selected
+    @assertEq((t.grid.getCell(0, 0).flags & CELL_SELECTED), 0)
+    @assertEq((t.grid.getCell(0, 1).flags & CELL_SELECTED), 0)
+    @assertEq((t.grid.getCell(0, 2).flags & CELL_SELECTED), CELL_SELECTED)
+    @assertEq((t.grid.getCell(0, 3).flags & CELL_SELECTED), CELL_SELECTED)
+    @assertEq((t.grid.getCell(1, 0).flags & CELL_SELECTED), CELL_SELECTED)
+    @assertEq((t.grid.getCell(1, 1).flags & CELL_SELECTED), CELL_SELECTED)
+    @assertEq((t.grid.getCell(1, 2).flags & CELL_SELECTED), 0)
+
+    // Extract text: "CD\nEF"
+    var buf: List(u8) = undefined
+    buf.items = 0
+    buf.count = 0
+    buf.capacity = 0
+    var i: i64 = 0
+    while (i < 64) {
+        buf.append(0)
+        i += 1
+    }
+    const len = t.writeSelectedText(buf.items, 64)
+    @assertEq(len, 5)
+    @assertEq(@intToPtr(*u8, buf.items + 0).*, 'C')
+    @assertEq(@intToPtr(*u8, buf.items + 1).*, 'D')
+    @assertEq(@intToPtr(*u8, buf.items + 2).*, '\n')
+    @assertEq(@intToPtr(*u8, buf.items + 3).*, 'E')
+    @assertEq(@intToPtr(*u8, buf.items + 4).*, 'F')
 }

@@ -272,6 +272,8 @@ class MetalRenderer {
                 let bg_g = cellPtr.load(fromByteOffset: 40, as: Int64.self)
                 let bg_b = cellPtr.load(fromByteOffset: 48, as: Int64.self)
 
+                let flags = cellPtr.load(fromByteOffset: 56, as: Int64.self)
+
                 // Background cell (skip black)
                 if bg_r != 0 || bg_g != 0 || bg_b != 0 {
                     cells.append(CellData(
@@ -281,6 +283,17 @@ class MetalRenderer {
                         offX: 0, offY: 0,
                         r: UInt8(clamping: bg_r), g: UInt8(clamping: bg_g),
                         b: UInt8(clamping: bg_b), a: 0xFF
+                    ))
+                }
+
+                // Selection overlay (between background and foreground)
+                if flags & 8 != 0 {
+                    cells.append(CellData(
+                        gridX: UInt16(col), gridY: UInt16(row),
+                        atlasX: solid.atlasX, atlasY: solid.atlasY,
+                        glyphW: solid.width, glyphH: solid.height,
+                        offX: 0, offY: 0,
+                        r: Theme.selR, g: Theme.selG, b: Theme.selB, a: Theme.selA
                     ))
                 }
 

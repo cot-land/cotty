@@ -136,6 +136,33 @@ final class CottySurface {
         return UnsafeRawPointer(bitPattern: Int(ptr))
     }
 
+    // MARK: - Terminal Selection
+
+    func selectionStart(row: Int, col: Int) {
+        cotty_terminal_selection_start(handle, Int64(row), Int64(col))
+    }
+
+    func selectionUpdate(row: Int, col: Int) {
+        cotty_terminal_selection_update(handle, Int64(row), Int64(col))
+    }
+
+    func selectionClear() {
+        cotty_terminal_selection_clear(handle)
+    }
+
+    var selectionActive: Bool {
+        cotty_terminal_selection_active(handle) != 0
+    }
+
+    var selectedText: String? {
+        let ptr = cotty_terminal_selected_text(handle)
+        let len = cotty_terminal_selected_text_len(handle)
+        guard ptr != 0, len > 0 else { return nil }
+        let bufPtr = UnsafeRawPointer(bitPattern: Int(ptr))!
+        let data = Data(bytes: bufPtr, count: Int(len))
+        return String(data: data, encoding: .utf8)
+    }
+
     // MARK: - Convenience
 
     var bufferContent: String {

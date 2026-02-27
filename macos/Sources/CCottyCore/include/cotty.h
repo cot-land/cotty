@@ -85,4 +85,12 @@ int64_t cotty_terminal_child_pid(cotty_surface_t surface);
 // Raw grid buffer access (avoids per-cell FFI overhead)
 int64_t cotty_terminal_cells_ptr(cotty_surface_t surface);
 
+// Terminal selection
+void cotty_terminal_selection_start(cotty_surface_t surface, int64_t row, int64_t col);
+void cotty_terminal_selection_update(cotty_surface_t surface, int64_t row, int64_t col);
+void cotty_terminal_selection_clear(cotty_surface_t surface);
+int64_t cotty_terminal_selection_active(cotty_surface_t surface);
+int64_t cotty_terminal_selected_text(cotty_surface_t surface);
+int64_t cotty_terminal_selected_text_len(cotty_surface_t surface);
+
 #endif

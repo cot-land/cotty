@@ -15,6 +15,7 @@ struct Cell {
 const CELL_BOLD: i64 = 1
 const CELL_UNDERLINE: i64 = 2
 const CELL_INVERSE: i64 = 4
+const CELL_SELECTED: i64 = 8
 
 impl Cell {
     /// Create an empty cell with default colors (white on black).

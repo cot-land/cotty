@@ -133,13 +133,54 @@ class TerminalView: NSView {
         )
     }
 
+    // MARK: - Mouse Selection
+
+    private func gridPosition(from event: NSEvent) -> (row: Int, col: Int) {
+        let point = convert(event.locationInWindow, from: nil)
+        let pad = Theme.paddingPoints
+        let col = Int((point.x - pad) / renderer.cellWidthPoints)
+        let row = Int((point.y - pad) / renderer.cellHeightPoints)
+        let clampedRow = max(0, min(row, surface.terminalRows - 1))
+        let clampedCol = max(0, min(col, surface.terminalCols - 1))
+        return (clampedRow, clampedCol)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let pos = gridPosition(from: event)
+        surface.selectionStart(row: pos.row, col: pos.col)
+        renderFrame()
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        let pos = gridPosition(from: event)
+        surface.selectionUpdate(row: pos.row, col: pos.col)
+        renderFrame()
+    }
+
     // MARK: - Input Handling
 
     override func keyDown(with event: NSEvent) {
+        // Cmd+C → copy selection to clipboard
+        if event.modifierFlags.contains(.command) && event.charactersIgnoringModifiers == "c" {
+            if surface.selectionActive, let text = surface.selectedText {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+                surface.selectionClear()
+                renderFrame()
+                return
+            }
+        }
+
         // Let Cmd+key combos through to the menu responder chain
         if event.modifierFlags.contains(.command) {
             super.keyDown(with: event)
             return
+        }
+
+        // Clear selection when typing
+        if surface.selectionActive {
+            surface.selectionClear()
+            renderFrame()
         }
 
         let data = translateKeyToBytes(event)

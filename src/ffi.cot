@@ -406,3 +406,52 @@ export fn cotty_terminal_child_pid(surface: i64) i64 {
 export fn cotty_terminal_cells_ptr(surface: i64) i64 {
     return getSurfacePtr(surface).terminal.grid.cells.items
 }
+
+// ============================================================================
+// Terminal selection
+// ============================================================================
+
+/// Selected text buffer — allocated on first use.
+var g_sel_buf: i64 = 0
+var g_sel_buf_cap: i64 = 0
+var g_sel_len: i64 = 0
+
+/// Begin a selection at (row, col).
+export fn cotty_terminal_selection_start(surface: i64, row: i64, col: i64) void {
+    getSurfacePtr(surface).terminal.selectionStart(row, col)
+}
+
+/// Update selection endpoint to (row, col).
+export fn cotty_terminal_selection_update(surface: i64, row: i64, col: i64) void {
+    getSurfacePtr(surface).terminal.selectionUpdate(row, col)
+}
+
+/// Clear the selection.
+export fn cotty_terminal_selection_clear(surface: i64) void {
+    getSurfacePtr(surface).terminal.selectionClear()
+}
+
+/// Return 1 if a selection is active, 0 otherwise.
+export fn cotty_terminal_selection_active(surface: i64) i64 {
+    if (getSurfacePtr(surface).terminal.sel_active) {
+        return 1
+    }
+    return 0
+}
+
+/// Extract selected text into an internal buffer and return the pointer.
+/// Call cotty_terminal_selected_text_len to get the byte count.
+export fn cotty_terminal_selected_text(surface: i64) i64 {
+    // Ensure buffer allocated (64KB)
+    if (g_sel_buf == 0) {
+        g_sel_buf_cap = 65536
+        g_sel_buf = alloc(0, g_sel_buf_cap)
+    }
+    g_sel_len = getSurfacePtr(surface).terminal.writeSelectedText(g_sel_buf, g_sel_buf_cap)
+    return g_sel_buf
+}
+
+/// Return the byte length of the last extracted selected text.
+export fn cotty_terminal_selected_text_len(surface: i64) i64 {
+    return g_sel_len
+}
