@@ -236,7 +236,6 @@ class MetalRenderer {
         layer: CAMetalLayer,
         surface: CottySurface,
         cursorVisible: Bool,
-        inspectorActive: Bool = false,
         cursorShape: Int = 0
     ) {
         guard let drawable = layer.nextDrawable() else { return }
@@ -362,60 +361,6 @@ class MetalRenderer {
             ))
         }
 
-        // Inspector overlay — rendered at the bottom of the terminal
-        if inspectorActive {
-            let inspRows = Int(cotty_inspector_rows())
-            let inspCols = Int(cotty_inspector_cols())
-            let inspPtr = cotty_inspector_cells_ptr()
-            if inspPtr != 0 && inspRows > 0 && inspCols > 0 {
-                let inspBase = UnsafeRawPointer(bitPattern: Int(inspPtr))!
-                let inspStride = 64  // 8 fields * 8 bytes
-                let startRow = max(0, rows - inspRows)
-
-                for ir in 0..<inspRows {
-                    let termRow = startRow + ir
-                    if termRow >= rows { break }
-                    for ic in 0..<min(inspCols, cols) {
-                        let offset = (ir * inspCols + ic) * inspStride
-                        let cellPtr = inspBase + offset
-
-                        let cp = cellPtr.load(fromByteOffset: 0, as: Int64.self)
-                        let i_fg_r = cellPtr.load(fromByteOffset: 8, as: Int64.self)
-                        let i_fg_g = cellPtr.load(fromByteOffset: 16, as: Int64.self)
-                        let i_fg_b = cellPtr.load(fromByteOffset: 24, as: Int64.self)
-                        let i_bg_r = cellPtr.load(fromByteOffset: 32, as: Int64.self)
-                        let i_bg_g = cellPtr.load(fromByteOffset: 40, as: Int64.self)
-                        let i_bg_b = cellPtr.load(fromByteOffset: 48, as: Int64.self)
-
-                        // Background
-                        if i_bg_r != 0 || i_bg_g != 0 || i_bg_b != 0 {
-                            cells.append(CellData(
-                                gridX: UInt16(ic), gridY: UInt16(termRow),
-                                atlasX: solid.atlasX, atlasY: solid.atlasY,
-                                glyphW: solid.width, glyphH: solid.height,
-                                offX: 0, offY: 0,
-                                r: UInt8(clamping: i_bg_r), g: UInt8(clamping: i_bg_g),
-                                b: UInt8(clamping: i_bg_b), a: 0xFF
-                            ))
-                        }
-
-                        // Foreground glyph
-                        if cp >= 32 {
-                            let g = atlas.lookup(UInt32(cp))
-                            cells.append(CellData(
-                                gridX: UInt16(ic), gridY: UInt16(termRow),
-                                atlasX: g.atlasX, atlasY: g.atlasY,
-                                glyphW: g.width, glyphH: g.height,
-                                offX: 0, offY: 0,
-                                r: UInt8(clamping: i_fg_r), g: UInt8(clamping: i_fg_g),
-                                b: UInt8(clamping: i_fg_b), a: 0xFF
-                            ))
-                        }
-                    }
-                }
-            }
-        }
-
         let proj = simd_float4x4(
             SIMD4<Float>(2.0 / drawW, 0, 0, 0),
             SIMD4<Float>(0, -2.0 / drawH, 0, 0),
@@ -436,6 +381,125 @@ class MetalRenderer {
         passDesc.colorAttachments[0].clearColor = MTLClearColor(
             red: Theme.shared.bgR, green: Theme.shared.bgG, blue: Theme.shared.bgB, alpha: 1.0
         )
+
+        let cmdBuf = commandQueue.makeCommandBuffer()!
+        let enc = cmdBuf.makeRenderCommandEncoder(descriptor: passDesc)!
+
+        if !cells.isEmpty {
+            let cellBuf = device.makeBuffer(
+                bytes: cells,
+                length: cells.count * MemoryLayout<CellData>.stride,
+                options: .storageModeShared
+            )!
+
+            enc.setRenderPipelineState(pipelineState)
+            enc.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 0)
+            enc.setVertexBuffer(cellBuf, offset: 0, index: 1)
+            enc.setFragmentTexture(atlas.texture, index: 0)
+
+            enc.drawPrimitives(
+                type: .triangleStrip,
+                vertexStart: 0,
+                vertexCount: 4,
+                instanceCount: cells.count
+            )
+        }
+
+        enc.endEncoding()
+        cmdBuf.present(drawable)
+        cmdBuf.commit()
+    }
+
+    /// Render the inspector cell grid into its own Metal layer.
+    /// Same cell rendering logic as the terminal, but no cursor or selection.
+    func renderInspector(
+        layer: CAMetalLayer,
+        surface: CottySurface
+    ) {
+        guard let drawable = layer.nextDrawable() else { return }
+
+        let drawW = Float(layer.drawableSize.width)
+        let drawH = Float(layer.drawableSize.height)
+        let scale = Float(layer.contentsScale)
+        let pad = Float(Theme.shared.paddingPoints) * scale
+
+        let cellW = Float(atlas.cellWidth)
+        let cellH = Float(atlas.cellHeight)
+
+        // Read inspector grid under terminal lock
+        surface.lockTerminal()
+        let inspRows = surface.inspectorRows
+        let inspCols = surface.inspectorCols
+        guard let inspBase = surface.inspectorCellsPtr else {
+            surface.unlockTerminal()
+            return
+        }
+
+        var cells: [CellData] = []
+        let solid = atlas.solidInfo
+        let inspStride = 64  // 8 fields * 8 bytes
+
+        for row in 0..<inspRows {
+            for col in 0..<inspCols {
+                let offset = (row * inspCols + col) * inspStride
+                let cellPtr = inspBase + offset
+
+                let codepoint = cellPtr.load(fromByteOffset: 0, as: Int64.self)
+                let fg_r = cellPtr.load(fromByteOffset: 8, as: Int64.self)
+                let fg_g = cellPtr.load(fromByteOffset: 16, as: Int64.self)
+                let fg_b = cellPtr.load(fromByteOffset: 24, as: Int64.self)
+                let bg_r = cellPtr.load(fromByteOffset: 32, as: Int64.self)
+                let bg_g = cellPtr.load(fromByteOffset: 40, as: Int64.self)
+                let bg_b = cellPtr.load(fromByteOffset: 48, as: Int64.self)
+
+                // Background
+                if bg_r != 0 || bg_g != 0 || bg_b != 0 {
+                    cells.append(CellData(
+                        gridX: UInt16(col), gridY: UInt16(row),
+                        atlasX: solid.atlasX, atlasY: solid.atlasY,
+                        glyphW: solid.width, glyphH: solid.height,
+                        offX: 0, offY: 0,
+                        r: UInt8(clamping: bg_r), g: UInt8(clamping: bg_g),
+                        b: UInt8(clamping: bg_b), a: 0xFF
+                    ))
+                }
+
+                // Foreground glyph
+                if codepoint >= 32 {
+                    let g = atlas.lookup(UInt32(codepoint))
+                    cells.append(CellData(
+                        gridX: UInt16(col), gridY: UInt16(row),
+                        atlasX: g.atlasX, atlasY: g.atlasY,
+                        glyphW: g.width, glyphH: g.height,
+                        offX: 0, offY: 0,
+                        r: UInt8(clamping: fg_r), g: UInt8(clamping: fg_g),
+                        b: UInt8(clamping: fg_b), a: 0xFF
+                    ))
+                }
+            }
+        }
+        surface.unlockTerminal()
+
+        // Orthographic projection
+        let proj = simd_float4x4(
+            SIMD4<Float>(2.0 / drawW, 0, 0, 0),
+            SIMD4<Float>(0, -2.0 / drawH, 0, 0),
+            SIMD4<Float>(0, 0, 1, 0),
+            SIMD4<Float>(-1, 1, 0, 1)
+        )
+        var uniforms = Uniforms(
+            projection: proj,
+            cellSize: SIMD2<Float>(cellW, cellH),
+            atlasSize: SIMD2<Float>(Float(atlas.atlasWidth), Float(atlas.atlasHeight)),
+            padding: SIMD2<Float>(pad, pad)
+        )
+
+        let passDesc = MTLRenderPassDescriptor()
+        passDesc.colorAttachments[0].texture = drawable.texture
+        passDesc.colorAttachments[0].loadAction = .clear
+        passDesc.colorAttachments[0].storeAction = .store
+        // Dark inspector background
+        passDesc.colorAttachments[0].clearColor = MTLClearColor(red: 0.098, green: 0.098, blue: 0.118, alpha: 1.0)
 
         let cmdBuf = commandQueue.makeCommandBuffer()!
         let enc = cmdBuf.makeRenderCommandEncoder(descriptor: passDesc)!

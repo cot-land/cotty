@@ -21,8 +21,6 @@ import "inspector"
 // ============================================================================
 
 var g_app: App = undefined
-var g_inspector: KeyInspector = undefined
-var g_inspector_init: bool = false
 
 /// Action queue — one pending action, read by Swift after each call.
 var g_action_tag: i64 = 0
@@ -298,6 +296,8 @@ export fn cotty_surface_kind(surface: i64) i64 {
 /// Starts the IO reader thread after the surface is in its final memory location.
 export fn cotty_terminal_surface_new(app: i64, rows: i64, cols: i64) i64 {
     const s = g_app.addTerminalSurface(rows, cols)
+    // Wire inspector pointer into the parser so VT events are recorded
+    s.parser.inspector_ptr = @ptrToInt(&s.inspector)
     // Start IO thread now that the surface is at its final address in the list
     s.startIoThread()
     return @ptrToInt(s)
@@ -360,9 +360,7 @@ export fn cotty_terminal_key(surface: i64, key: i64, mods: i64) void {
     captureBegin()
     keyToTerminalBytes(sptr.shell.master_fd, key, mods, sptr.terminal.mode_app_cursor)
     const bytes = captureEnd()
-    if (g_inspector_init and g_inspector.active) {
-        g_inspector.recordEvent(key, mods, bytes)
-    }
+    sptr.inspector.recordKeyEvent(key, mods, bytes)
 }
 
 /// Write raw bytes to the terminal's PTY (sends input to the shell).
@@ -756,53 +754,75 @@ export fn cotty_terminal_focus_event_mode(surface: i64) i64 {
 }
 
 // ============================================================================
-// Key Inspector
+// Per-Surface Inspector
 // ============================================================================
 
-fn ensureInspector() void {
-    if (!g_inspector_init) {
-        g_inspector = KeyInspector.init()
-        g_inspector_init = true
-    }
-}
-
-/// Toggle the key inspector overlay.
+/// Toggle the inspector panel for a surface.
 export fn cotty_inspector_toggle(surface: i64) void {
-    ensureInspector()
-    // Sync overlay width with terminal cols
     const sptr = getSurfacePtr(surface)
-    g_inspector.overlay_cols = sptr.terminal.grid.cols
-    g_inspector.toggle()
+    sptr.inspector.toggle()
 }
 
 /// Return 1 if the inspector is active, 0 otherwise.
-export fn cotty_inspector_active() i64 {
-    if (!g_inspector_init) { return 0 }
-    if (g_inspector.active) { return 1 }
+export fn cotty_inspector_active(surface: i64) i64 {
+    if (getSurfacePtr(surface).inspector.active) { return 1 }
     return 0
 }
 
-/// Return the number of rows in the inspector overlay.
-export fn cotty_inspector_rows() i64 {
-    if (!g_inspector_init) { return 0 }
-    return INSPECTOR_ROWS
+/// Return the number of rows in the inspector grid.
+export fn cotty_inspector_rows(surface: i64) i64 {
+    return getSurfacePtr(surface).inspector.rows
 }
 
-/// Return the number of columns in the inspector overlay.
-export fn cotty_inspector_cols() i64 {
-    if (!g_inspector_init) { return 0 }
-    return g_inspector.overlay_cols
+/// Return the number of columns in the inspector grid.
+export fn cotty_inspector_cols(surface: i64) i64 {
+    return getSurfacePtr(surface).inspector.cols
 }
 
-/// Return a pointer to the inspector overlay cells buffer.
-export fn cotty_inspector_cells_ptr() i64 {
-    if (!g_inspector_init) { return 0 }
-    return g_inspector.overlay.cells.items
+/// Return a pointer to the inspector cells buffer.
+export fn cotty_inspector_cells_ptr(surface: i64) i64 {
+    return getSurfacePtr(surface).inspector.grid.cells.items
 }
 
-/// Notify the inspector that the terminal width changed.
-export fn cotty_inspector_resize(cols: i64) void {
-    ensureInspector()
-    g_inspector.resizeOverlay(cols)
+/// Resize the inspector grid.
+export fn cotty_inspector_resize(surface: i64, rows: i64, cols: i64) void {
+    getSurfacePtr(surface).inspector.resize(rows, cols)
+}
+
+/// Switch the inspector to a different panel (0=Screen, 1=Modes, 2=Keyboard, 3=Terminal IO).
+export fn cotty_inspector_set_panel(surface: i64, panel: i64) void {
+    getSurfacePtr(surface).inspector.setPanel(panel)
+}
+
+/// Scroll the inspector panel.
+export fn cotty_inspector_scroll(surface: i64, delta: i64) void {
+    getSurfacePtr(surface).inspector.scroll(delta)
+}
+
+/// Return the total scrollable content rows for the current panel.
+export fn cotty_inspector_content_rows(surface: i64) i64 {
+    return getSurfacePtr(surface).inspector.contentRows()
+}
+
+/// Return the current scroll offset for the active panel.
+export fn cotty_inspector_scroll_offset(surface: i64) i64 {
+    return getSurfacePtr(surface).inspector.scrollOffset()
+}
+
+/// Set the absolute scroll offset for the active panel.
+export fn cotty_inspector_set_scroll(surface: i64, offset: i64) void {
+    getSurfacePtr(surface).inspector.setScrollOffset(offset)
+}
+
+/// Rebuild the Screen/Modes panels with current terminal state.
+/// Must be called under terminal lock.
+export fn cotty_inspector_rebuild_terminal_state(surface: i64) void {
+    const sptr = getSurfacePtr(surface)
+    if (!sptr.inspector.active) { return }
+    if (sptr.inspector.panel == PANEL_SCREEN) {
+        sptr.inspector.rebuildScreenFrom(sptr.terminal)
+    } else if (sptr.inspector.panel == PANEL_MODES) {
+        sptr.inspector.rebuildModesFrom(sptr.terminal)
+    }
 }
 

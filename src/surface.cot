@@ -12,6 +12,7 @@ import "input"
 import "terminal"
 import "vt_parser"
 import "pty"
+import "inspector"
 
 // ============================================================================
 // Pipe fd unpacking (same bit ops as pty.cot)
@@ -77,6 +78,7 @@ struct Surface {
     io_thread: Thread,
     notify_pipe_read: i64,
     notify_pipe_write: i64,
+    inspector: Inspector,
 
     /// Create an empty, untitled editor surface (heap-allocated with ARC).
     static fn init() *Surface {
@@ -98,6 +100,7 @@ struct Surface {
             io_thread: dummy_thread,
             notify_pipe_read: -1,
             notify_pipe_write: -1,
+            inspector: Inspector.init(24, 80),
         }
     }
 
@@ -123,6 +126,7 @@ struct Surface {
                 io_thread: dummy_thread,
                 notify_pipe_read: -1,
                 notify_pipe_write: -1,
+                inspector: Inspector.init(24, 80),
             }
         }
 
@@ -140,6 +144,7 @@ struct Surface {
             io_thread: dummy_thread,
             notify_pipe_read: -1,
             notify_pipe_write: -1,
+            inspector: Inspector.init(24, 80),
         }
     }
 
@@ -176,6 +181,7 @@ struct Surface {
             io_thread: dummy_thread,
             notify_pipe_read: pipe_r,
             notify_pipe_write: pipe_w,
+            inspector: Inspector.init(rows, cols),
         }
     }
 

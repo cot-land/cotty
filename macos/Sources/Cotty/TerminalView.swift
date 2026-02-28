@@ -9,13 +9,15 @@ import QuartzCore
 /// Shell is spawned by Cot's Pty.spawn() (in surface.cot). A Cot IO thread
 /// reads PTY output and feeds bytes through the VT parser. Swift monitors
 /// a notification pipe for render signals and reads the cell grid under mutex.
+///
+/// Uses standard macOS coordinates (y=0 at bottom) — no isFlipped, matching Ghostty.
 class TerminalView: NSView {
     let surface: CottySurface
     weak var windowController: TerminalWindowController?
 
     // Metal
     private static let metalDevice = MTLCreateSystemDefaultDevice()!
-    private var renderer: MetalRenderer!
+    private(set) var renderer: MetalRenderer!
     private let metalView: MetalLayerView
 
     // Notification pipe — IO thread signals when new content is available
@@ -33,7 +35,6 @@ class TerminalView: NSView {
 
     // MARK: - NSView Setup
 
-    override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
 
     init(frame: NSRect, surface: CottySurface) {
@@ -65,12 +66,11 @@ class TerminalView: NSView {
         scrollView.borderType = .noBorder
         scrollView.frame = bounds
         scrollView.autoresizingMask = [.width, .height]
-        // Disable scroll view's own scrolling — we handle scroll events directly
         scrollView.hasHorizontalScroller = false
 
-        let clipView = FlippedClipView()
+        // Use standard (non-flipped) clip view
+        let clipView = scrollView.contentView
         clipView.drawsBackground = false
-        scrollView.contentView = clipView
 
         sizerView.terminalView = self
         sizerView.frame = bounds
@@ -123,7 +123,6 @@ class TerminalView: NSView {
         if newRows != surface.terminalRows || newCols != surface.terminalCols {
             surface.lockTerminal()
             surface.terminalResize(rows: newRows, cols: newCols)
-            cotty_inspector_resize(Int64(newCols))
             surface.unlockTerminal()
         }
     }
@@ -166,7 +165,6 @@ class TerminalView: NSView {
             layer: metalView.metalLayer,
             surface: surface,
             cursorVisible: effectiveCursorVisible,
-            inspectorActive: cotty_inspector_active() != 0,
             cursorShape: shape
         )
 
@@ -192,11 +190,15 @@ class TerminalView: NSView {
         }
 
         updateScrollbar(scrollbackRows: scrollback, visibleRows: rows, viewportRow: viewportRow)
+
+        // Notify inspector to re-render
+        windowController?.notifyInspectorRender()
     }
 
     // MARK: - Scrollbar
 
     /// Update the sizer view height and scroll position to reflect scrollback state.
+    /// Non-flipped: y=0 is bottom of document. Active area at bottom, scrollback at top.
     private func updateScrollbar(scrollbackRows: Int, visibleRows: Int, viewportRow: Int) {
         guard renderer != nil else { return }
         let cellH = renderer.cellHeightPoints
@@ -214,13 +216,14 @@ class TerminalView: NSView {
             )
         }
 
-        // Sync scroll position to viewport without triggering clipViewBoundsChanged
+        // Non-flipped scroll mapping:
+        // viewportRow=-1 (bottom/active) → targetY = 0 (bottom of document)
+        // viewportRow=0 (oldest scrollback) → targetY = sizerHeight - visibleHeight (top)
         let targetY: CGFloat
         if viewportRow < 0 {
-            // At bottom — scroll to end
-            targetY = max(0, sizerHeight - visibleHeight)
+            targetY = 0
         } else {
-            targetY = CGFloat(viewportRow) * cellH
+            targetY = max(0, sizerHeight - visibleHeight - CGFloat(viewportRow) * cellH)
         }
 
         let currentY = scrollView.contentView.bounds.origin.y
@@ -233,6 +236,7 @@ class TerminalView: NSView {
     }
 
     /// When the user drags the scrollbar, map scroll position to viewport row.
+    /// Non-flipped: scrollY=0 → bottom (active), scrollY=max → top (oldest scrollback).
     @objc private func clipViewBoundsChanged(_ notification: Notification) {
         guard !ignoreScrollUpdate else { return }
         guard renderer != nil else { return }
@@ -241,7 +245,11 @@ class TerminalView: NSView {
         let cellH = renderer.cellHeightPoints
         guard cellH > 0 else { return }
 
-        let row = Int(scrollY / cellH)
+        let visibleHeight = scrollView.contentView.bounds.height
+        let sizerHeight = sizerView.frame.height
+
+        // Map scroll position to viewport row
+        let row = Int((sizerHeight - visibleHeight - scrollY) / cellH)
 
         surface.lockTerminal()
         let scrollback = surface.scrollbackRows
@@ -256,11 +264,13 @@ class TerminalView: NSView {
 
     // MARK: - Mouse Selection
 
+    /// Convert mouse event to grid (row, col). Non-flipped: y=0 at bottom, row 0 at top.
     private func gridPosition(from event: NSEvent) -> (row: Int, col: Int) {
         let point = convert(event.locationInWindow, from: nil)
         let pad = Theme.shared.paddingPoints
         let col = Int((point.x - pad) / renderer.cellWidthPoints)
-        let row = Int((point.y - pad) / renderer.cellHeightPoints)
+        // Non-flipped: flip Y so row 0 is at the top of the view
+        let row = Int((bounds.height - point.y - pad) / renderer.cellHeightPoints)
         let clampedRow = max(0, min(row, surface.terminalRows - 1))
         let clampedCol = max(0, min(col, surface.terminalCols - 1))
         return (clampedRow, clampedCol)
@@ -319,15 +329,6 @@ class TerminalView: NSView {
         let cellH = Int64(renderer.cellHeightPoints * 1000)
         surface.lockTerminal()
         surface.sendScroll(delta: delta, precise: precise ? 1 : 0, cellHeight: cellH, col: pos.col + 1, row: pos.row + 1)
-        surface.unlockTerminal()
-        renderFrame()
-    }
-
-    // MARK: - Inspector
-
-    func toggleInspector() {
-        surface.lockTerminal()
-        cotty_inspector_toggle(surface.handle)
         surface.unlockTerminal()
         renderFrame()
     }
@@ -457,8 +458,6 @@ class TerminalView: NSView {
 private class TerminalSizerView: NSView {
     weak var terminalView: TerminalView?
 
-    override var isFlipped: Bool { true }
-
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(terminalView)
         terminalView?.mouseDown(with: event)
@@ -477,18 +476,11 @@ private class TerminalSizerView: NSView {
     }
 }
 
-/// Flipped clip view for top-left origin scroll coordinates.
-private class FlippedClipView: NSClipView {
-    override var isFlipped: Bool { true }
-}
-
 // MARK: - MetalLayerView (shared with EditorView)
 
 /// CAMetalLayer-backed view for GPU rendering. Passes mouse events through.
 private class MetalLayerView: NSView {
     let device: MTLDevice
-
-    override var isFlipped: Bool { true }
 
     init(frame: NSRect, device: MTLDevice) {
         self.device = device

@@ -5,6 +5,7 @@ import "std/list"
 import "std/string"
 import "terminal"
 import "cell"
+import "inspector"
 
 // ============================================================================
 // Parser States
@@ -69,6 +70,7 @@ struct VtParser {
     utf8_remaining: i64,
     esc_intermediate: i64,
     osc_buf: List(i64),
+    inspector_ptr: i64,
 
     /// Create a parser in the ground state.
     static fn init() VtParser {
@@ -85,6 +87,7 @@ struct VtParser {
             utf8_remaining: 0,
             esc_intermediate: 0,
             osc_buf: osc,
+            inspector_ptr: 0,
         }
     }
 
@@ -159,10 +162,20 @@ struct VtParser {
         self.feedBytes(terminal, data)
     }
 
+    // -- Inspector recording -------------------------------------------------
+
+    /// Record a VT event to the inspector (no-op if inspector_ptr is 0 or inactive).
+    fn recordVt(kind: i64, params: string, raw_bytes: string) void {
+        if (self.inspector_ptr == 0) { return }
+        const insp = @intToPtr(*Inspector, self.inspector_ptr)
+        insp.recordVtEvent(kind, params, raw_bytes)
+    }
+
     // -- C0 controls --------------------------------------------------------
 
     /// Execute a C0 control character (0x00-0x1F, excluding ESC).
     fn executeC0(terminal: *TerminalState, b: i64) void {
+        self.recordVt(VT_C0, c0Name(b), "")
         switch (b) {
             0x07 => terminal.bell(),
             0x0D => terminal.carriageReturn(),
@@ -311,6 +324,21 @@ struct VtParser {
 
     /// Dispatch a complete CSI sequence based on the final byte.
     fn dispatchCsi(terminal: *TerminalState, ch: i64) void {
+        // Record to inspector
+        if (self.inspector_ptr != 0) {
+            var sb: StringBuilder = .{}
+            if (self.intermediate != 0) { sb.appendByte(self.intermediate) }
+            var pi: i64 = 0
+            while (pi < self.params.count) {
+                if (pi > 0) { sb.appendByte(';') }
+                sb.appendInt(self.params.get(pi))
+                pi += 1
+            }
+            sb.appendByte(' ')
+            sb.appendByte(ch)
+            self.recordVt(VT_CSI, sb.toString(), "")
+        }
+
         switch (ch) {
             'A' => terminal.cursorUp(self.param(0, 1)),
             'B' => terminal.cursorDown(self.param(0, 1)),
@@ -421,6 +449,18 @@ struct VtParser {
 
     /// Parse and apply SGR (Select Graphic Rendition) parameters.
     fn dispatchSgr(terminal: *TerminalState) void {
+        // Record to inspector
+        if (self.inspector_ptr != 0) {
+            var sb: StringBuilder = .{}
+            var pi: i64 = 0
+            while (pi < self.params.count) {
+                if (pi > 0) { sb.appendByte(';') }
+                sb.appendInt(self.params.get(pi))
+                pi += 1
+            }
+            self.recordVt(VT_SGR, sb.toString(), "")
+        }
+
         if (self.params.count == 0) {
             terminal.resetAttributes()
             return
@@ -550,6 +590,23 @@ struct VtParser {
     /// Dispatch a complete OSC sequence from osc_buf.
     fn dispatchOsc(terminal: *TerminalState) void {
         if (self.osc_buf.count == 0) { return }
+
+        // Record to inspector
+        if (self.inspector_ptr != 0) {
+            var sb: StringBuilder = .{}
+            var oi: i64 = 0
+            while (oi < self.osc_buf.count and oi < 60) {
+                const ch = self.osc_buf.get(oi)
+                if (ch >= 32 and ch < 127) {
+                    sb.appendByte(ch)
+                } else {
+                    sb.appendByte('.')
+                }
+                oi += 1
+            }
+            if (self.osc_buf.count > 60) { sb.append("...") }
+            self.recordVt(VT_OSC, sb.toString(), "")
+        }
 
         // Parse numeric command before first ';'
         var cmd: i64 = 0

@@ -128,13 +128,19 @@ int64_t cotty_terminal_bell(cotty_surface_t surface);
 int64_t cotty_terminal_bracketed_paste_mode(cotty_surface_t surface);
 int64_t cotty_terminal_focus_event_mode(cotty_surface_t surface);
 
-// Key Inspector
+// Per-Surface Inspector
 void cotty_inspector_toggle(cotty_surface_t surface);
-int64_t cotty_inspector_active(void);
-int64_t cotty_inspector_rows(void);
-int64_t cotty_inspector_cols(void);
-int64_t cotty_inspector_cells_ptr(void);
-void cotty_inspector_resize(int64_t cols);
+int64_t cotty_inspector_active(cotty_surface_t surface);
+int64_t cotty_inspector_rows(cotty_surface_t surface);
+int64_t cotty_inspector_cols(cotty_surface_t surface);
+int64_t cotty_inspector_cells_ptr(cotty_surface_t surface);
+void cotty_inspector_resize(cotty_surface_t surface, int64_t rows, int64_t cols);
+void cotty_inspector_set_panel(cotty_surface_t surface, int64_t panel);
+void cotty_inspector_scroll(cotty_surface_t surface, int64_t delta);
+int64_t cotty_inspector_content_rows(cotty_surface_t surface);
+int64_t cotty_inspector_scroll_offset(cotty_surface_t surface);
+void cotty_inspector_set_scroll(cotty_surface_t surface, int64_t offset);
+void cotty_inspector_rebuild_terminal_state(cotty_surface_t surface);
 
 // Config accessors
 int64_t cotty_config_font_name(void);

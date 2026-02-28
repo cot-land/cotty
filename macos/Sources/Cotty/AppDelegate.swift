@@ -133,7 +133,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let viewMenuItem = NSMenuItem()
         let viewMenu = NSMenu(title: "View")
         viewMenu.addItem(withTitle: "Toggle Sidebar", action: #selector(EditorWindowController.toggleSidebar(_:)), keyEquivalent: "b")
-        let inspectorItem = NSMenuItem(title: "Toggle Key Inspector", action: #selector(TerminalWindowController.toggleKeyInspector(_:)), keyEquivalent: "i")
+        let inspectorItem = NSMenuItem(title: "Terminal Inspector", action: #selector(TerminalWindowController.toggleTerminalInspector(_:)), keyEquivalent: "i")
         inspectorItem.keyEquivalentModifierMask = [.command, .option]
         viewMenu.addItem(inspectorItem)
         viewMenu.addItem(withTitle: "Toggle Full Screen", action: #selector(NSWindow.toggleFullScreen(_:)), keyEquivalent: "f")

@@ -279,6 +279,50 @@ final class CottySurface {
         return (0, 0)
     }
 
+    // MARK: - Inspector
+
+    var inspectorActive: Bool { cotty_inspector_active(handle) != 0 }
+    var inspectorRows: Int { Int(cotty_inspector_rows(handle)) }
+    var inspectorCols: Int { Int(cotty_inspector_cols(handle)) }
+
+    var inspectorCellsPtr: UnsafeRawPointer? {
+        let ptr = cotty_inspector_cells_ptr(handle)
+        guard ptr != 0 else { return nil }
+        return UnsafeRawPointer(bitPattern: Int(ptr))
+    }
+
+    func toggleInspector() {
+        cotty_inspector_toggle(handle)
+    }
+
+    func inspectorSetPanel(_ panel: Int) {
+        cotty_inspector_set_panel(handle, Int64(panel))
+    }
+
+    func inspectorScroll(delta: Int) {
+        cotty_inspector_scroll(handle, Int64(delta))
+    }
+
+    var inspectorContentRows: Int {
+        Int(cotty_inspector_content_rows(handle))
+    }
+
+    var inspectorScrollOffset: Int {
+        Int(cotty_inspector_scroll_offset(handle))
+    }
+
+    func inspectorSetScroll(offset: Int) {
+        cotty_inspector_set_scroll(handle, Int64(offset))
+    }
+
+    func inspectorResize(rows: Int, cols: Int) {
+        cotty_inspector_resize(handle, Int64(rows), Int64(cols))
+    }
+
+    func inspectorRebuildTerminalState() {
+        cotty_inspector_rebuild_terminal_state(handle)
+    }
+
     // MARK: - Convenience
 
     var bufferContent: String {
