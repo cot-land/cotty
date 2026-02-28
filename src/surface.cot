@@ -3,13 +3,55 @@
 
 import "std/os"
 import "std/fs"
+import "std/sys"
 import "std/string"
+import "std/thread"
 import "buffer"
 import "cursor"
 import "input"
 import "terminal"
 import "vt_parser"
 import "pty"
+
+// ============================================================================
+// Pipe fd unpacking (same bit ops as pty.cot)
+// ============================================================================
+
+fn pipeReadFd(fds: i64) i64 {
+    return fds & 4294967295
+}
+
+fn pipeWriteFd(fds: i64) i64 {
+    return (fds >> 32) & 4294967295
+}
+
+// ============================================================================
+// IO Reader Thread
+// ============================================================================
+
+/// Top-level function for the IO reader thread.
+/// Reads from PTY fd in a blocking loop, feeds bytes through VT parser
+/// under mutex, then signals main thread via notification pipe.
+fn ioReaderMain(arg: i64) void {
+    const surface = @intToPtr(*Surface, arg)
+    const fd = surface.shell.master_fd
+    var buf = alloc(0, 4096)
+    while (true) {
+        const n = fd_read(fd, buf, 4096)
+        if (n <= 0) { break }
+        surface.terminal_mutex.lock()
+        var i: i64 = 0
+        while (i < n) {
+            const b = @intToPtr(*u8, buf + i).*
+            surface.parser.feed(surface.terminal, b)
+            i += 1
+        }
+        surface.terminal_mutex.unlock()
+        // Notify main thread — content doesn't matter, just a signal
+        fd_write(surface.notify_pipe_write, @ptrOf("!"), 1)
+    }
+    dealloc(buf)
+}
 
 // ============================================================================
 // Surface Kind
@@ -29,11 +71,19 @@ struct Surface {
     terminal: TerminalState,
     parser: VtParser,
     shell: Pty,
+    terminal_mutex: Mutex,
+    io_thread: Thread,
+    notify_pipe_read: i64,
+    notify_pipe_write: i64,
 }
 
 impl Surface {
     /// Create an empty, untitled editor surface.
     static fn init() Surface {
+        var dummy_mutex: Mutex = undefined
+        dummy_mutex.ptr = 0
+        var dummy_thread: Thread = undefined
+        dummy_thread.handle = 0
         return Surface {
             kind: SURFACE_EDITOR,
             buffer: Buffer.init(),
@@ -44,11 +94,19 @@ impl Surface {
             terminal: TerminalState.init(0, 0),
             parser: VtParser.init(),
             shell: Pty { master_fd: -1, child_pid: -1 },
+            terminal_mutex: dummy_mutex,
+            io_thread: dummy_thread,
+            notify_pipe_read: -1,
+            notify_pipe_write: -1,
         }
     }
 
     /// Create an editor surface from a file path.
     static fn initFromFile(path: string) Surface {
+        var dummy_mutex: Mutex = undefined
+        dummy_mutex.ptr = 0
+        var dummy_thread: Thread = undefined
+        dummy_thread.handle = 0
         const content = readFile(path) catch {
             // File doesn't exist yet — create empty surface with path
             return Surface {
@@ -61,6 +119,10 @@ impl Surface {
                 terminal: TerminalState.init(0, 0),
                 parser: VtParser.init(),
                 shell: Pty { master_fd: -1, child_pid: -1 },
+                terminal_mutex: dummy_mutex,
+                io_thread: dummy_thread,
+                notify_pipe_read: -1,
+                notify_pipe_write: -1,
             }
         }
 
@@ -74,15 +136,32 @@ impl Surface {
             terminal: TerminalState.init(0, 0),
             parser: VtParser.init(),
             shell: Pty { master_fd: -1, child_pid: -1 },
+            terminal_mutex: dummy_mutex,
+            io_thread: dummy_thread,
+            notify_pipe_read: -1,
+            notify_pipe_write: -1,
         }
     }
 
     /// Create a terminal surface with a shell spawned via Cot's PTY.
+    /// Sets up IO reader thread: mutex, notification pipe, and spawns thread.
     static fn initTerminal(rows: i64, cols: i64) Surface {
         const pty = Pty.spawn(rows, cols)
         var term = TerminalState.init(rows, cols)
         term.pty_fd = pty.master_fd
-        return Surface {
+
+        // Create mutex to protect terminal state + parser
+        var mtx = Mutex.init()
+
+        // Create notification pipe for IO thread → main thread signaling
+        const pipe_fds = pipe()
+        const pipe_r = pipeReadFd(pipe_fds)
+        const pipe_w = pipeWriteFd(pipe_fds)
+
+        var dummy_thread: Thread = undefined
+        dummy_thread.handle = 0
+
+        var s = Surface {
             kind: SURFACE_TERMINAL,
             buffer: Buffer.init(),
             cursor: Cursor.init(),
@@ -92,7 +171,19 @@ impl Surface {
             terminal: term,
             parser: VtParser.init(),
             shell: pty,
+            terminal_mutex: mtx,
+            io_thread: dummy_thread,
+            notify_pipe_read: pipe_r,
+            notify_pipe_write: pipe_w,
         }
+
+        return s
+    }
+
+    /// Spawn the IO reader thread. Must be called after surface is at its
+    /// final memory location (i.e., after being added to the surface list).
+    fn startIoThread() void {
+        self.io_thread = Thread.spawn(@ptrToInt(ioReaderMain), @ptrToInt(self))
     }
 
     /// Handle an input action, mutating buffer and cursor as needed.
@@ -422,6 +513,9 @@ test "terminal surface kind" {
     @assertEq(s.terminal.grid.rows, 24)
     @assertEq(s.terminal.grid.cols, 80)
     s.shell.close()
+    fd_close(s.notify_pipe_read)
+    fd_close(s.notify_pipe_write)
+    s.terminal_mutex.destroy()
 }
 
 test "editor surface has inactive terminal" {

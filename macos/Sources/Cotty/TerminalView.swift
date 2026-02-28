@@ -6,9 +6,9 @@ import QuartzCore
 /// NSView for terminal surfaces — renders the terminal grid via Metal and
 /// bridges keyboard input to the PTY.
 ///
-/// Shell is spawned by Cot's Pty.spawn() (in surface.cot). Swift monitors
-/// the PTY fd for output, feeds bytes through Cot's VT parser
-/// (cotty_terminal_feed), and renders the cell grid via Metal.
+/// Shell is spawned by Cot's Pty.spawn() (in surface.cot). A Cot IO thread
+/// reads PTY output and feeds bytes through the VT parser. Swift monitors
+/// a notification pipe for render signals and reads the cell grid under mutex.
 class TerminalView: NSView {
     let surface: CottySurface
     weak var windowController: TerminalWindowController?
@@ -18,9 +18,9 @@ class TerminalView: NSView {
     private var renderer: MetalRenderer!
     private let metalView: MetalLayerView
 
-    // PTY I/O — fd owned by Cot's Pty struct
-    private var readSource: DispatchSourceRead?
-    private let readBuffer = UnsafeMutablePointer<UInt8>.allocate(capacity: 4096)
+    // Notification pipe — IO thread signals when new content is available
+    private var notifySource: DispatchSourceRead?
+    private let notifyBuffer = UnsafeMutablePointer<UInt8>.allocate(capacity: 1024)
 
     // Cursor blink
     private var cursorVisible = true
@@ -43,8 +43,8 @@ class TerminalView: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     deinit {
-        readSource?.cancel()
-        readBuffer.deallocate()
+        notifySource?.cancel()
+        notifyBuffer.deallocate()
         blinkTimer?.invalidate()
     }
 
@@ -60,7 +60,7 @@ class TerminalView: NSView {
         metalView.metalLayer.contentsScale = window.backingScaleFactor
         updateDrawableSize()
         resizeTerminalGrid(bounds.size)
-        startPtyMonitor()
+        startNotifyMonitor()
         startBlinkTimer()
         renderFrame()
     }
@@ -87,50 +87,48 @@ class TerminalView: NSView {
         let newCols = max(2, Int((size.width - 2 * pad) / renderer.cellWidthPoints))
         let newRows = max(2, Int((size.height - 2 * pad) / renderer.cellHeightPoints))
         if newRows != surface.terminalRows || newCols != surface.terminalCols {
+            surface.lockTerminal()
             surface.terminalResize(rows: newRows, cols: newCols)
+            cotty_inspector_resize(Int64(newCols))
+            surface.unlockTerminal()
         }
     }
 
-    // MARK: - PTY Monitoring (fd owned by Cot's Pty struct)
+    // MARK: - Notification Pipe Monitoring
 
-    private func startPtyMonitor() {
-        let fd = surface.ptyFd
+    /// Monitor the notification pipe from the IO reader thread.
+    /// When the IO thread finishes a VT parse batch, it writes to the pipe.
+    /// We drain the pipe and re-render under lock.
+    private func startNotifyMonitor() {
+        let fd = surface.notifyFd
         guard fd >= 0 else { return }
-        // Compiler workaround: Cot's set_nonblocking may not work in dylib mode,
-        // so we ensure O_NONBLOCK from Swift. The DispatchSource I/O monitoring
-        // itself is platform-specific and correctly lives here.
+        // Set notify pipe read end to non-blocking so we can drain it
         let flags = fcntl(fd, F_GETFL)
-        fcntl(fd, F_SETFL, flags | O_NONBLOCK)
+        _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
         let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: .main)
         source.setEventHandler { [weak self] in
-            self?.readPty()
+            guard let self else { return }
+            // Drain the pipe (just a signal, content doesn't matter)
+            while Darwin.read(fd, self.notifyBuffer, 1024) > 0 {}
+            self.renderFrame()
         }
-        source.setCancelHandler { /* fd closed in deinit */ }
+        source.setCancelHandler { /* pipe closed by cotty_terminal_surface_free */ }
         source.resume()
-        readSource = source
-    }
-
-    private func readPty() {
-        let fd = surface.ptyFd
-        while true {
-            let n = Darwin.read(fd, readBuffer, 4096)
-            if n <= 0 { break }
-            for i in 0..<n {
-                cotty_terminal_feed_byte(surface.handle, Int64(readBuffer[i]))
-            }
-        }
-        renderFrame()
+        notifySource = source
     }
 
     // MARK: - Rendering
 
     private func renderFrame() {
         guard renderer != nil else { return }
+        surface.lockTerminal()
         renderer.renderTerminal(
             layer: metalView.metalLayer,
             surface: surface,
-            cursorVisible: cursorVisible && surface.terminalCursorVisible
+            cursorVisible: cursorVisible && surface.terminalCursorVisible,
+            inspectorActive: cotty_inspector_active() != 0
         )
+        surface.unlockTerminal()
     }
 
     // MARK: - Mouse Selection
@@ -147,13 +145,67 @@ class TerminalView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         let pos = gridPosition(from: event)
+        surface.lockTerminal()
+        if surface.mouseTrackingMode != 0 {
+            // 1-indexed for SGR mouse protocol
+            surface.sendMouseEvent(button: 0, col: pos.col + 1, row: pos.row + 1, pressed: true)
+            surface.unlockTerminal()
+            return
+        }
         surface.selectionStart(row: pos.row, col: pos.col)
+        surface.unlockTerminal()
         renderFrame()
     }
 
     override func mouseDragged(with event: NSEvent) {
         let pos = gridPosition(from: event)
+        surface.lockTerminal()
+        if surface.mouseTrackingMode >= 1002 {
+            // Button-event or any-event tracking: report motion with button 32 (drag)
+            surface.sendMouseEvent(button: 32, col: pos.col + 1, row: pos.row + 1, pressed: true)
+            surface.unlockTerminal()
+            return
+        }
+        if surface.mouseTrackingMode != 0 {
+            surface.unlockTerminal()
+            return  // mode 1000 doesn't report drag
+        }
         surface.selectionUpdate(row: pos.row, col: pos.col)
+        surface.unlockTerminal()
+        renderFrame()
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        let pos = gridPosition(from: event)
+        surface.lockTerminal()
+        if surface.mouseTrackingMode != 0 {
+            surface.sendMouseEvent(button: 0, col: pos.col + 1, row: pos.row + 1, pressed: false)
+            surface.unlockTerminal()
+            return
+        }
+        surface.unlockTerminal()
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        // Ghostty: SurfaceView_AppKit.swift scrollWheel — thin platform forwarder
+        let pos = gridPosition(from: event)
+        var y = event.scrollingDeltaY
+        let precise = event.hasPreciseScrollingDeltas
+        if precise { y *= 2 }  // Ghostty's 2x precision multiplier
+        let delta = Int64(y * 1000)
+        let cellH = Int64(renderer.cellHeightPoints * 1000)
+        surface.lockTerminal()
+        surface.sendScroll(delta: delta, precise: precise ? 1 : 0, cellHeight: cellH, col: pos.col + 1, row: pos.row + 1)
+        surface.unlockTerminal()
+        renderFrame()
+    }
+
+    // MARK: - Inspector
+
+    func toggleInspector() {
+        surface.lockTerminal()
+        cotty_inspector_toggle(surface.handle)
+        surface.unlockTerminal()
         renderFrame()
     }
 
@@ -162,10 +214,16 @@ class TerminalView: NSView {
     override func keyDown(with event: NSEvent) {
         // Cmd+C → copy selection to clipboard
         if event.modifierFlags.contains(.command) && event.charactersIgnoringModifiers == "c" {
-            if surface.selectionActive, let text = surface.selectedText {
+            surface.lockTerminal()
+            let hasSelection = surface.selectionActive
+            let text = hasSelection ? surface.selectedText : nil
+            if hasSelection {
+                surface.selectionClear()
+            }
+            surface.unlockTerminal()
+            if let text {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(text, forType: .string)
-                surface.selectionClear()
                 renderFrame()
                 return
             }
@@ -178,14 +236,18 @@ class TerminalView: NSView {
         }
 
         // Clear selection when typing
+        surface.lockTerminal()
         if surface.selectionActive {
             surface.selectionClear()
-            renderFrame()
         }
+        surface.unlockTerminal()
 
         let (key, mods) = CottySurface.translateKeyEvent(event)
         guard key != 0 else { return }
+        // terminalKey writes to PTY fd (thread-safe) and reads mode_app_cursor
+        surface.lockTerminal()
         surface.terminalKey(key, mods: mods)
+        surface.unlockTerminal()
         resetCursorBlink()
     }
 

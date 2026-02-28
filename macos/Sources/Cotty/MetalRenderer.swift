@@ -1,3 +1,4 @@
+import CCottyCore
 import Foundation
 import Metal
 import QuartzCore
@@ -234,7 +235,8 @@ class MetalRenderer {
     func renderTerminal(
         layer: CAMetalLayer,
         surface: CottySurface,
-        cursorVisible: Bool
+        cursorVisible: Bool,
+        inspectorActive: Bool = false
     ) {
         guard let drawable = layer.nextDrawable() else { return }
 
@@ -336,6 +338,60 @@ class MetalRenderer {
                 offX: 0, offY: 0,
                 r: Theme.shared.cursorR, g: Theme.shared.cursorG, b: Theme.shared.cursorB, a: 0x80
             ))
+        }
+
+        // Inspector overlay — rendered at the bottom of the terminal
+        if inspectorActive {
+            let inspRows = Int(cotty_inspector_rows())
+            let inspCols = Int(cotty_inspector_cols())
+            let inspPtr = cotty_inspector_cells_ptr()
+            if inspPtr != 0 && inspRows > 0 && inspCols > 0 {
+                let inspBase = UnsafeRawPointer(bitPattern: Int(inspPtr))!
+                let inspStride = 64  // 8 fields * 8 bytes
+                let startRow = max(0, rows - inspRows)
+
+                for ir in 0..<inspRows {
+                    let termRow = startRow + ir
+                    if termRow >= rows { break }
+                    for ic in 0..<min(inspCols, cols) {
+                        let offset = (ir * inspCols + ic) * inspStride
+                        let cellPtr = inspBase + offset
+
+                        let cp = cellPtr.load(fromByteOffset: 0, as: Int64.self)
+                        let i_fg_r = cellPtr.load(fromByteOffset: 8, as: Int64.self)
+                        let i_fg_g = cellPtr.load(fromByteOffset: 16, as: Int64.self)
+                        let i_fg_b = cellPtr.load(fromByteOffset: 24, as: Int64.self)
+                        let i_bg_r = cellPtr.load(fromByteOffset: 32, as: Int64.self)
+                        let i_bg_g = cellPtr.load(fromByteOffset: 40, as: Int64.self)
+                        let i_bg_b = cellPtr.load(fromByteOffset: 48, as: Int64.self)
+
+                        // Background
+                        if i_bg_r != 0 || i_bg_g != 0 || i_bg_b != 0 {
+                            cells.append(CellData(
+                                gridX: UInt16(ic), gridY: UInt16(termRow),
+                                atlasX: solid.atlasX, atlasY: solid.atlasY,
+                                glyphW: solid.width, glyphH: solid.height,
+                                offX: 0, offY: 0,
+                                r: UInt8(clamping: i_bg_r), g: UInt8(clamping: i_bg_g),
+                                b: UInt8(clamping: i_bg_b), a: 0xFF
+                            ))
+                        }
+
+                        // Foreground glyph
+                        if cp >= 32 {
+                            let g = atlas.lookup(UInt32(cp))
+                            cells.append(CellData(
+                                gridX: UInt16(ic), gridY: UInt16(termRow),
+                                atlasX: g.atlasX, atlasY: g.atlasY,
+                                glyphW: g.width, glyphH: g.height,
+                                offX: 0, offY: 0,
+                                r: UInt8(clamping: i_fg_r), g: UInt8(clamping: i_fg_g),
+                                b: UInt8(clamping: i_fg_b), a: 0xFF
+                            ))
+                        }
+                    }
+                }
+            }
         }
 
         let proj = simd_float4x4(

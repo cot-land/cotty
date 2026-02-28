@@ -188,12 +188,23 @@ impl VtParser {
             terminal.restoreCursor()
             self.state = VT_GROUND
         } else if (b == 'c') {
+            // RIS — Full Reset
             terminal.grid.clear()
             terminal.setCursorPos(0, 0)
             terminal.resetAttributes()
             terminal.scroll_top = 0
             terminal.scroll_bottom = terminal.grid.rows - 1
             terminal.pending_wrap = false
+            terminal.cursor_visible = true
+            terminal.mode_app_cursor = false
+            terminal.mode_bracketed_paste = false
+            terminal.mode_mouse_tracking = 0
+            terminal.mode_mouse_format = 0
+            terminal.mode_focus_events = false
+            terminal.mode_sync_output = false
+            if (terminal.mode_alt_screen) {
+                terminal.leaveAltScreen()
+            }
             self.state = VT_GROUND
         } else if (b == '\\') {
             // ST — String Terminator (ends OSC/DCS)
@@ -283,14 +294,22 @@ impl VtParser {
                 terminal.grid.scrollDown(terminal.scroll_top, terminal.scroll_bottom)
                 count -= 1
             }
+        } else if (ch == 'X') {
+            // ECH — Erase Characters (erase N chars at cursor without moving)
+            terminal.eraseChars(self.param(0, 1))
         } else if (ch == 'n') {
             // DSR — Device Status Report
-            if (self.param(0, 0) == 6) {
+            const dsrParam = self.param(0, 0)
+            if (dsrParam == 5) {
+                terminal.sendOperatingStatus()
+            } else if (dsrParam == 6) {
                 terminal.sendCursorPositionReport()
             }
         } else if (ch == 'c') {
             // DA — Device Attributes
-            if (self.intermediate == 0 or self.intermediate == '?') {
+            if (self.intermediate == '>') {
+                terminal.sendSecondaryDeviceAttributes()
+            } else if (self.intermediate == 0 or self.intermediate == '?') {
                 terminal.sendPrimaryDeviceAttributes()
             }
         } else if (ch == 'h' or ch == 'l') {

@@ -124,10 +124,19 @@ class GlyphAtlas {
 
     private func renderAndCache(_ codepoint: UInt32) -> GlyphInfo {
         guard nextSlot < totalSlots else { return solidInfo }
-        guard let bitmap = Self.renderGlyphBitmap(font: font, codepoint: codepoint,
-                                                   cellWidth: cellWidth, cellHeight: cellHeight,
-                                                   descent: descent) else {
-            // Cache miss glyph as solid to avoid re-rendering
+
+        // Try primary font first, then fall back to system font for the codepoint
+        var bitmap = Self.renderGlyphBitmap(font: font, codepoint: codepoint,
+                                            cellWidth: cellWidth, cellHeight: cellHeight,
+                                            descent: descent)
+        if bitmap == nil {
+            if let fallback = Self.fallbackFont(for: codepoint, primaryFont: font) {
+                bitmap = Self.renderGlyphBitmap(font: fallback, codepoint: codepoint,
+                                                cellWidth: cellWidth, cellHeight: cellHeight,
+                                                descent: descent)
+            }
+        }
+        guard let bitmap else {
             glyphs[codepoint] = solidInfo
             return solidInfo
         }
@@ -159,6 +168,24 @@ class GlyphAtlas {
         )
         glyphs[codepoint] = info
         return info
+    }
+
+    /// Find a fallback font that contains the given codepoint.
+    private static func fallbackFont(for codepoint: UInt32, primaryFont: CTFont) -> CTFont? {
+        let utf16: [UniChar]
+        if codepoint <= 0xFFFF {
+            utf16 = [UniChar(codepoint)]
+        } else {
+            let u = codepoint - 0x10000
+            utf16 = [UniChar(0xD800 + (u >> 10)), UniChar(0xDC00 + (u & 0x3FF))]
+        }
+        let str = NSString(characters: utf16, length: utf16.count)
+        let fallback = CTFontCreateForString(primaryFont, str, CFRange(location: 0, length: str.length))
+        // Only use if it's actually different from the primary font
+        let fallbackName = CTFontCopyPostScriptName(fallback) as String
+        let primaryName = CTFontCopyPostScriptName(primaryFont) as String
+        if fallbackName == primaryName { return nil }
+        return fallback
     }
 
     /// Render a single glyph into a cellWidth x cellHeight R8 bitmap.

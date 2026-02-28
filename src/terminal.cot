@@ -19,6 +19,9 @@ struct TerminalGrid {
     rows: i64,
     cols: i64,
     row_wrap: List(i64),
+    active_start: i64,
+    max_scrollback: i64,
+    scrollback_enabled: bool,
 }
 
 impl TerminalGrid {
@@ -51,23 +54,26 @@ impl TerminalGrid {
             rows: rows,
             cols: cols,
             row_wrap: wraps,
+            active_start: 0,
+            max_scrollback: 10000,
+            scrollback_enabled: true,
         }
     }
 
-    /// Get a pointer to the cell at (row, col).
+    /// Get a pointer to the cell at (row, col), offset by active_start.
     fn getCell(row: i64, col: i64) *Cell {
-        const idx = row * self.cols + col
+        const idx = (self.active_start + row) * self.cols + col
         return @intToPtr(*Cell, self.cells.items + idx * @sizeOf(Cell))
     }
 
     /// Get the wrap flag for a row (1 = soft-wrapped into next row).
     fn getRowWrap(row: i64) i64 {
-        return @intToPtr(*i64, self.row_wrap.items + row * @sizeOf(i64)).*
+        return @intToPtr(*i64, self.row_wrap.items + (self.active_start + row) * @sizeOf(i64)).*
     }
 
     /// Set the wrap flag for a row (1 = soft-wrapped, 0 = hard break).
     fn setRowWrap(row: i64, val: i64) void {
-        @intToPtr(*i64, self.row_wrap.items + row * @sizeOf(i64)).* = val
+        @intToPtr(*i64, self.row_wrap.items + (self.active_start + row) * @sizeOf(i64)).* = val
     }
 
     /// Clear the entire grid to default blank cells.
@@ -90,12 +96,29 @@ impl TerminalGrid {
     }
 
     /// Scroll the region [top..bottom] up by one line.
-    /// Content and wrap flags shift up, bottom line is cleared with defaults.
+    /// Full-screen scroll on primary screen: append blank row, increment active_start
+    /// (old top row preserved as scrollback). Sub-region: memcpy within active area.
     fn scrollUp(top: i64, bottom: i64) void {
+        // Full-screen scroll with scrollback enabled: no memcpy needed
+        if (top == 0 and bottom == self.rows - 1 and self.scrollback_enabled) {
+            // Append a blank row of cells
+            var i: i64 = 0
+            while (i < self.cols) {
+                self.cells.append(Cell.init())
+                i += 1
+            }
+            // Append a wrap flag for the new row
+            self.row_wrap.append(0)
+            // Advance active_start — old top row is now scrollback
+            self.active_start += 1
+            self.trimScrollback()
+            return
+        }
+        // Sub-region scroll: memcpy within active area
         var row = top
         while (row < bottom) {
-            const dst = self.cells.items + (row * self.cols) * @sizeOf(Cell)
-            const src = self.cells.items + ((row + 1) * self.cols) * @sizeOf(Cell)
+            const dst = self.cells.items + ((self.active_start + row) * self.cols) * @sizeOf(Cell)
+            const src = self.cells.items + ((self.active_start + row + 1) * self.cols) * @sizeOf(Cell)
             memcpy(dst, src, self.cols * @sizeOf(Cell))
             self.setRowWrap(row, self.getRowWrap(row + 1))
             row += 1
@@ -108,8 +131,8 @@ impl TerminalGrid {
     fn scrollDown(top: i64, bottom: i64) void {
         var row = bottom
         while (row > top) {
-            const dst = self.cells.items + (row * self.cols) * @sizeOf(Cell)
-            const src = self.cells.items + ((row - 1) * self.cols) * @sizeOf(Cell)
+            const dst = self.cells.items + ((self.active_start + row) * self.cols) * @sizeOf(Cell)
+            const src = self.cells.items + ((self.active_start + row - 1) * self.cols) * @sizeOf(Cell)
             memcpy(dst, src, self.cols * @sizeOf(Cell))
             self.setRowWrap(row, self.getRowWrap(row - 1))
             row -= 1
@@ -133,6 +156,24 @@ impl TerminalGrid {
             self.scrollUp(row, bottom)
             i += 1
         }
+    }
+
+    /// Trim scrollback when it exceeds max_scrollback rows.
+    /// Moves remaining cells/wraps forward and adjusts active_start.
+    fn trimScrollback() void {
+        if (self.active_start <= self.max_scrollback) { return }
+        const trim = self.active_start - self.max_scrollback
+        const total_cells = (self.active_start + self.rows) * self.cols
+        const keep_cells = total_cells - trim * self.cols
+        // memmove cells forward
+        memcpy(self.cells.items, self.cells.items + trim * self.cols * @sizeOf(Cell), keep_cells * @sizeOf(Cell))
+        self.cells.count = keep_cells
+        // memmove row_wrap forward
+        const total_wraps = self.active_start + self.rows
+        const keep_wraps = total_wraps - trim
+        memcpy(self.row_wrap.items, self.row_wrap.items + trim * @sizeOf(i64), keep_wraps * @sizeOf(i64))
+        self.row_wrap.count = keep_wraps
+        self.active_start = self.max_scrollback
     }
 }
 
@@ -181,11 +222,17 @@ struct TerminalState {
     mode_alt_screen: bool,
     mode_app_cursor: bool,
     mode_bracketed_paste: bool,
+    mode_mouse_tracking: i64,
+    mode_mouse_format: i64,
+    mode_focus_events: bool,
+    mode_sync_output: bool,
     alt_grid: TerminalGrid,
     alt_cursor_row: i64,
     alt_cursor_col: i64,
     alt_saved_row: i64,
     alt_saved_col: i64,
+    scroll_accumulator: i64,
+    viewport_row: i64,
 }
 
 impl TerminalState {
@@ -231,11 +278,17 @@ impl TerminalState {
             mode_alt_screen: false,
             mode_app_cursor: false,
             mode_bracketed_paste: false,
+            mode_mouse_tracking: 0,
+            mode_mouse_format: 0,
+            mode_focus_events: false,
+            mode_sync_output: false,
             alt_grid: TerminalGrid.init(0, 0),
             alt_cursor_row: 0,
             alt_cursor_col: 0,
             alt_saved_row: 0,
             alt_saved_col: 0,
+            scroll_accumulator: 0,
+            viewport_row: -1,
         }
     }
 
@@ -495,6 +548,19 @@ impl TerminalState {
         }
     }
 
+    /// Erase N characters at cursor position without moving cursor (ECH).
+    fn eraseChars(count: i64) void {
+        self.pending_wrap = false
+        const row = self.cursor_row
+        const col = self.cursor_col
+        const n = @min(count, self.grid.cols - col)
+        var c = col
+        while (c < col + n) {
+            self.grid.getCell(row, c).* = Cell.init()
+            c += 1
+        }
+    }
+
     // -- Save / restore cursor (DECSC, DECRC) -------------------------------
 
     /// Save cursor position (DECSC).
@@ -536,26 +602,54 @@ impl TerminalState {
             self.mode_app_cursor = enable
         } else if (mode == 25) {
             self.cursor_visible = enable
+        } else if (mode == 47 or mode == 1047) {
+            // Legacy alt screen (no cursor save/restore)
+            if (enable) {
+                self.enterAltScreen()
+            } else {
+                self.leaveAltScreen()
+            }
+        } else if (mode == 1048) {
+            // Save/restore cursor only (used alongside 47/1047)
+            if (enable) {
+                self.saveCursor()
+            } else {
+                self.restoreCursor()
+            }
         } else if (mode == 1049) {
             if (enable) {
                 self.enterAltScreen()
             } else {
                 self.leaveAltScreen()
             }
+        } else if (mode == 1000) {
+            if (enable) { self.mode_mouse_tracking = 1000 } else { self.mode_mouse_tracking = 0 }
+        } else if (mode == 1002) {
+            if (enable) { self.mode_mouse_tracking = 1002 } else { self.mode_mouse_tracking = 0 }
+        } else if (mode == 1003) {
+            if (enable) { self.mode_mouse_tracking = 1003 } else { self.mode_mouse_tracking = 0 }
+        } else if (mode == 1004) {
+            self.mode_focus_events = enable
+        } else if (mode == 1006) {
+            if (enable) { self.mode_mouse_format = 1006 } else { self.mode_mouse_format = 0 }
         } else if (mode == 2004) {
             self.mode_bracketed_paste = enable
+        } else if (mode == 2026) {
+            self.mode_sync_output = enable
         }
     }
 
     /// Enter alternate screen buffer: save cursor and swap to a fresh grid.
     fn enterAltScreen() void {
         if (self.mode_alt_screen) { return }
+        self.viewport_row = -1
         self.alt_cursor_row = self.cursor_row
         self.alt_cursor_col = self.cursor_col
         self.alt_saved_row = self.saved_row
         self.alt_saved_col = self.saved_col
         self.alt_grid = self.grid
         self.grid = TerminalGrid.init(self.grid.rows, self.grid.cols)
+        self.grid.scrollback_enabled = false
         self.cursor_row = 0
         self.cursor_col = 0
         self.scroll_top = 0
@@ -592,10 +686,22 @@ impl TerminalState {
         writeStr(self.pty_fd, "R")
     }
 
-    /// Send primary device attributes response: ESC [ ? 6 c
+    /// Send primary device attributes response (VT220 + color, matches Ghostty).
     fn sendPrimaryDeviceAttributes() void {
         if (self.pty_fd < 0) { return }
-        writeStr(self.pty_fd, "\x1b[?6c")
+        writeStr(self.pty_fd, "\x1b[?62;22c")
+    }
+
+    /// Send secondary device attributes response (matches Ghostty).
+    fn sendSecondaryDeviceAttributes() void {
+        if (self.pty_fd < 0) { return }
+        writeStr(self.pty_fd, "\x1b[>1;10;0c")
+    }
+
+    /// Send operating status report: terminal OK.
+    fn sendOperatingStatus() void {
+        if (self.pty_fd < 0) { return }
+        writeStr(self.pty_fd, "\x1b[0n")
     }
 
     /// Write a decimal integer to an fd as ASCII digits.
@@ -624,6 +730,7 @@ impl TerminalState {
     // -- Resize -------------------------------------------------------------
 
     /// Resize rows only (no column change), preserving content and wrap flags.
+    /// Discards scrollback (active_start resets to 0 in new grid).
     fn resizeRowsOnly(new_rows: i64) void {
         var new_grid = TerminalGrid.init(new_rows, self.grid.cols)
         const copy_rows = @min(self.grid.rows, new_rows)
@@ -631,13 +738,14 @@ impl TerminalState {
         var row: i64 = 0
         while (row < copy_rows) {
             const dst = new_grid.cells.items + (row * self.grid.cols) * @sizeOf(Cell)
-            const src = self.grid.cells.items + (row * self.grid.cols) * @sizeOf(Cell)
+            const src = self.grid.cells.items + ((self.grid.active_start + row) * self.grid.cols) * @sizeOf(Cell)
             memcpy(dst, src, self.grid.cols * @sizeOf(Cell))
             new_grid.setRowWrap(row, self.grid.getRowWrap(row))
             row += 1
         }
 
         self.grid = new_grid
+        self.viewport_row = -1
         self.scroll_top = 0
         self.scroll_bottom = new_rows - 1
         self.cursor_row = @min(self.cursor_row, new_rows - 1)
@@ -649,8 +757,22 @@ impl TerminalState {
     /// to the new column width. Cursor position is tracked through reflow.
     fn resize(new_rows: i64, new_cols: i64) void {
         if (new_rows == self.grid.rows and new_cols == self.grid.cols) { return }
+        // Alt screen: TUI apps redraw after SIGWINCH, so skip reflow entirely.
+        // Just create a blank grid and clamp cursor (like Ghostty).
+        if (self.mode_alt_screen) {
+            if (self.alt_grid.rows > 0) {
+                self.alt_grid = TerminalGrid.init(new_rows, new_cols)
+            }
+            self.grid = TerminalGrid.init(new_rows, new_cols)
+            if (self.cursor_row >= new_rows) { self.cursor_row = new_rows - 1 }
+            if (self.cursor_col >= new_cols) { self.cursor_col = new_cols - 1 }
+            self.scroll_top = 0
+            self.scroll_bottom = new_rows - 1
+            self.pending_wrap = false
+            return
+        }
         // When in alt screen, also resize the saved main grid
-        if (self.mode_alt_screen and self.alt_grid.rows > 0) {
+        if (self.alt_grid.rows > 0) {
             self.alt_grid = TerminalGrid.init(new_rows, new_cols)
         }
         if (new_cols == self.grid.cols) {
@@ -793,6 +915,7 @@ impl TerminalState {
         self.grid = new_grid
         self.cursor_row = new_cursor_row
         self.cursor_col = new_cursor_col
+        self.viewport_row = -1
         self.scroll_top = 0
         self.scroll_bottom = new_rows - 1
         self.pending_wrap = false
@@ -950,6 +1073,120 @@ impl TerminalState {
         }
         return pos
     }
+
+    /// Scroll the viewport by delta rows. delta > 0 = show older content (scroll up).
+    /// Ported from Ghostty's scrollViewport.
+    fn scrollViewport(delta: i64) void {
+        if (self.mode_alt_screen) { return }
+        if (self.grid.active_start == 0) { return }
+
+        if (delta > 0) {
+            // Scroll up — show older content
+            if (self.viewport_row < 0) {
+                self.viewport_row = self.grid.active_start - delta
+            } else {
+                self.viewport_row = self.viewport_row - delta
+            }
+            if (self.viewport_row < 0) { self.viewport_row = 0 }
+        } else if (delta < 0) {
+            // Scroll down — show newer content
+            if (self.viewport_row >= 0) {
+                self.viewport_row = self.viewport_row - delta
+                if (self.viewport_row >= self.grid.active_start) {
+                    self.viewport_row = -1
+                }
+            }
+        }
+
+        if (self.sel_active) { self.selectionClear() }
+    }
+
+    /// Snap viewport to bottom (follow active).
+    fn scrollToBottom() void {
+        self.viewport_row = -1
+    }
+
+    /// Return true if viewport is at bottom (following active output).
+    fn viewportIsBottom() bool {
+        return self.viewport_row < 0
+    }
+
+    /// Handle a scroll wheel event. Ported from Ghostty's Surface.scrollCallback.
+    /// Normalizes pixel deltas to cell-row units, accumulates fractional scroll,
+    /// and dispatches as SGR mouse wheel events when mouse reporting is active.
+    /// delta: scroll delta in millipoints (points * 1000, fixed-point).
+    /// precise: 1 for trackpad (pixel deltas), 0 for discrete mouse wheel.
+    /// cell_height: cell height in millipoints (points * 1000).
+    /// col, row: 1-indexed terminal grid position.
+    fn scrollEvent(fd: i64, delta: i64, precise: i64, cell_height: i64, col: i64, row: i64) void {
+        if (cell_height <= 0) { return }
+
+        // Normalize delta to millipoints.
+        // Ghostty: precision scrolls use raw pixel deltas (Swift already 2x'd).
+        // Discrete scrolls convert "line ticks" to pixels: tick * cell_height * 3.
+        var adjusted = delta
+        if (precise == 0) {
+            adjusted = delta * cell_height * 3 / 1000
+        }
+
+        // Accumulate fractional scroll (Ghostty: mouse.pending_scroll_y)
+        self.scroll_accumulator = self.scroll_accumulator + adjusted
+
+        // Not enough for a full cell yet
+        if (self.scroll_accumulator < 0) {
+            if (self.scroll_accumulator > 0 - cell_height) { return }
+        } else {
+            if (self.scroll_accumulator < cell_height) { return }
+        }
+
+        // Calculate row delta (Ghostty: amount = poff / cell_size)
+        var rows = self.scroll_accumulator / cell_height
+        self.scroll_accumulator = self.scroll_accumulator - rows * cell_height
+
+        // If mouse reporting active, send SGR wheel events
+        // (Ghostty: self.isMouseReporting() → mouseReport)
+        if (self.mode_mouse_tracking != 0) {
+            var button: i64 = 65
+            if (rows > 0) { button = 64 }
+            if (rows < 0) { rows = 0 - rows }
+            var i: i64 = 0
+            while (i < rows) {
+                mouseToTerminalBytes(fd, button, col, row, 1)
+                i += 1
+            }
+            return
+        }
+
+        // Ghostty: alt screen + mouse_alternate_scroll mode → cursor keys
+        // (mode 1007 — not yet implemented in our VT parser)
+
+        // Scroll viewport (scrollback buffer)
+        self.scrollViewport(rows)
+    }
+}
+
+// ============================================================================
+// PTY byte capture — records bytes sent by keyToTerminalBytes for inspector
+// ============================================================================
+
+var g_capture_active: bool = false
+var g_capture_bytes: List(i64) = undefined
+var g_capture_init: bool = false
+
+fn captureBegin() void {
+    if (!g_capture_init) {
+        g_capture_bytes.items = 0
+        g_capture_bytes.count = 0
+        g_capture_bytes.capacity = 0
+        g_capture_init = true
+    }
+    g_capture_bytes.count = 0
+    g_capture_active = true
+}
+
+fn captureEnd() List(i64) {
+    g_capture_active = false
+    return g_capture_bytes.clone()
 }
 
 // ============================================================================
@@ -958,6 +1195,13 @@ impl TerminalState {
 
 /// Write a string to an fd.
 fn writeStr(fd: i64, s: string) void {
+    if (g_capture_active) {
+        var i: i64 = 0
+        while (i < @lenOf(s)) {
+            g_capture_bytes.append(@intToPtr(*u8, @ptrOf(s) + i).*)
+            i += 1
+        }
+    }
     fd_write(fd, @ptrOf(s), @lenOf(s))
 }
 
@@ -967,49 +1211,199 @@ var g_key_byte: i64 = 0
 fn writeByte(fd: i64, val: i64) void {
     if (g_key_byte == 0) { g_key_byte = alloc(0, 1) }
     @intToPtr(*u8, g_key_byte).* = @intCast(u8, val)
+    if (g_capture_active) {
+        g_capture_bytes.append(val)
+    }
     fd_write(fd, g_key_byte, 1)
 }
 
+/// Write a decimal integer to an fd as ASCII digits (free function version).
+fn writeDecimalFree(fd: i64, val: i64) void {
+    if (val == 0) {
+        writeByte(fd, '0')
+        return
+    }
+    var digits: i64 = 0
+    var count: i64 = 0
+    var v = val
+    while (v > 0) {
+        digits = digits * 10 + (v % 10)
+        count += 1
+        v = v / 10
+    }
+    while (count > 0) {
+        writeByte(fd, '0' + (digits % 10))
+        digits = digits / 10
+        count -= 1
+    }
+}
+
+/// Encode a mouse event as SGR (mode 1006) sequence and write to PTY fd.
+/// button: 0=left, 1=middle, 2=right, 32=drag, 64=wheel up, 65=wheel down.
+/// col, row: 1-indexed terminal coordinates.
+/// pressed: 1 for press/wheel, 0 for release.
+/// Format: ESC [ < button ; col ; row M (press) or m (release).
+fn mouseToTerminalBytes(fd: i64, button: i64, col: i64, row: i64, pressed: i64) void {
+    writeStr(fd, "\x1b[<")
+    writeDecimalFree(fd, button)
+    writeStr(fd, ";")
+    writeDecimalFree(fd, col)
+    writeStr(fd, ";")
+    writeDecimalFree(fd, row)
+    if (pressed == 1) {
+        writeStr(fd, "M")
+    } else {
+        writeStr(fd, "m")
+    }
+}
+
 /// Translate a key event into VT100 bytes and write to the given fd.
-/// This is the terminal counterpart of keyToAction — instead of producing
-/// an editor action, it writes the raw byte sequence the shell expects.
+/// Handles modifiers (Shift, Alt, Ctrl) using xterm-style encoding:
+///   modifier param = 1 + (shift?1:0) + (alt?2:0) + (ctrl?4:0)
 fn keyToTerminalBytes(fd: i64, key: i64, mods: i64, app_cursor: bool) void {
+    const has_ctrl = (mods & MOD_CTRL) != 0
+    const has_shift = (mods & MOD_SHIFT) != 0
+    const has_alt = (mods & MOD_ALT) != 0
+    const has_mods = has_ctrl or has_shift or has_alt
+
+    // Compute xterm modifier parameter: 1 + shift?1 + alt?2 + ctrl?4
+    var mod_param: i64 = 1
+    if (has_shift) { mod_param = mod_param + 1 }
+    if (has_alt) { mod_param = mod_param + 2 }
+    if (has_ctrl) { mod_param = mod_param + 4 }
+
     // Ctrl+key → control character (0x01-0x1A)
-    if ((mods & MOD_CTRL) != 0) {
-        if (key >= 'a' and key <= 'z') { writeByte(fd, key - 0x60) }
-        if (key >= 'A' and key <= 'Z') { writeByte(fd, key - 0x40) }
+    if (has_ctrl and !has_shift and !has_alt) {
+        if (key >= 'a' and key <= 'z') { writeByte(fd, key - 0x60); return }
+        if (key >= 'A' and key <= 'Z') { writeByte(fd, key - 0x40); return }
+    }
+
+    // Shift+Tab → backtab (ESC [ Z)
+    if (key == KEY_TAB and has_shift) {
+        writeStr(fd, "\x1b[Z")
         return
     }
 
-    // Application cursor mode: arrow/home/end send SS3 sequences
-    if (app_cursor) {
-        if (key == KEY_ARROW_UP) { writeStr(fd, "\x1bOA"); return }
-        if (key == KEY_ARROW_DOWN) { writeStr(fd, "\x1bOB"); return }
-        if (key == KEY_ARROW_RIGHT) { writeStr(fd, "\x1bOC"); return }
-        if (key == KEY_ARROW_LEFT) { writeStr(fd, "\x1bOD"); return }
-        if (key == KEY_HOME) { writeStr(fd, "\x1bOH"); return }
-        if (key == KEY_END) { writeStr(fd, "\x1bOF"); return }
+    // Arrow keys
+    if (key == KEY_ARROW_UP or key == KEY_ARROW_DOWN or key == KEY_ARROW_RIGHT or key == KEY_ARROW_LEFT) {
+        var letter: i64 = 'A'
+        if (key == KEY_ARROW_DOWN) { letter = 'B' }
+        if (key == KEY_ARROW_RIGHT) { letter = 'C' }
+        if (key == KEY_ARROW_LEFT) { letter = 'D' }
+
+        if (has_mods) {
+            // Modified arrows: ESC [ 1 ; mod letter
+            writeStr(fd, "\x1b[1;")
+            writeDecimalFree(fd, mod_param)
+            writeByte(fd, letter)
+        } else if (app_cursor) {
+            // App cursor mode: ESC O letter
+            writeStr(fd, "\x1b")
+            writeByte(fd, 'O')
+            writeByte(fd, letter)
+        } else {
+            // Normal mode: ESC [ letter
+            writeStr(fd, "\x1b[")
+            writeByte(fd, letter)
+        }
+        return
     }
 
-    // Special keys → VT100 escape sequences
-    const seq = switch (key) {
-        KEY_ENTER => "\r",
-        KEY_TAB => "\t",
-        KEY_BACKSPACE => "\x7f",
-        KEY_ESCAPE => "\x1b",
-        KEY_ARROW_UP => "\x1b[A",
-        KEY_ARROW_DOWN => "\x1b[B",
-        KEY_ARROW_RIGHT => "\x1b[C",
-        KEY_ARROW_LEFT => "\x1b[D",
-        KEY_HOME => "\x1b[H",
-        KEY_END => "\x1b[F",
-        KEY_DELETE => "\x1b[3~",
-        KEY_PAGE_UP => "\x1b[5~",
-        KEY_PAGE_DOWN => "\x1b[6~",
-        else => "",
+    // Home / End
+    if (key == KEY_HOME or key == KEY_END) {
+        var letter: i64 = 'H'
+        if (key == KEY_END) { letter = 'F' }
+
+        if (has_mods) {
+            writeStr(fd, "\x1b[1;")
+            writeDecimalFree(fd, mod_param)
+            writeByte(fd, letter)
+        } else if (app_cursor) {
+            writeStr(fd, "\x1b")
+            writeByte(fd, 'O')
+            writeByte(fd, letter)
+        } else {
+            writeStr(fd, "\x1b[")
+            writeByte(fd, letter)
+        }
+        return
     }
-    if (@lenOf(seq) > 0) {
-        writeStr(fd, seq)
+
+    // Delete (3~), PageUp (5~), PageDown (6~) — tilde-encoded
+    if (key == KEY_DELETE or key == KEY_PAGE_UP or key == KEY_PAGE_DOWN) {
+        var num: i64 = 3
+        if (key == KEY_PAGE_UP) { num = 5 }
+        if (key == KEY_PAGE_DOWN) { num = 6 }
+
+        if (has_mods) {
+            writeStr(fd, "\x1b[")
+            writeDecimalFree(fd, num)
+            writeStr(fd, ";")
+            writeDecimalFree(fd, mod_param)
+            writeStr(fd, "~")
+        } else {
+            writeStr(fd, "\x1b[")
+            writeDecimalFree(fd, num)
+            writeStr(fd, "~")
+        }
+        return
+    }
+
+    // Function keys F1-F4 (SS3: ESC O P/Q/R/S)
+    if (key >= KEY_F1 and key <= KEY_F4) {
+        var letter: i64 = 'P'
+        if (key == KEY_F2) { letter = 'Q' }
+        if (key == KEY_F3) { letter = 'R' }
+        if (key == KEY_F4) { letter = 'S' }
+
+        if (has_mods) {
+            writeStr(fd, "\x1b[1;")
+            writeDecimalFree(fd, mod_param)
+            writeByte(fd, letter)
+        } else {
+            writeStr(fd, "\x1b")
+            writeByte(fd, 'O')
+            writeByte(fd, letter)
+        }
+        return
+    }
+
+    // Function keys F5-F12 (tilde encoding)
+    if (key >= KEY_F5 and key <= KEY_F12) {
+        // F5=15, F6=17, F7=18, F8=19, F9=20, F10=21, F11=23, F12=24
+        var num: i64 = 15
+        if (key == KEY_F6) { num = 17 }
+        if (key == KEY_F7) { num = 18 }
+        if (key == KEY_F8) { num = 19 }
+        if (key == KEY_F9) { num = 20 }
+        if (key == KEY_F10) { num = 21 }
+        if (key == KEY_F11) { num = 23 }
+        if (key == KEY_F12) { num = 24 }
+
+        if (has_mods) {
+            writeStr(fd, "\x1b[")
+            writeDecimalFree(fd, num)
+            writeStr(fd, ";")
+            writeDecimalFree(fd, mod_param)
+            writeStr(fd, "~")
+        } else {
+            writeStr(fd, "\x1b[")
+            writeDecimalFree(fd, num)
+            writeStr(fd, "~")
+        }
+        return
+    }
+
+    // Simple special keys (no modifiers)
+    if (key == KEY_ENTER) { writeStr(fd, "\r"); return }
+    if (key == KEY_TAB) { writeStr(fd, "\t"); return }
+    if (key == KEY_BACKSPACE) { writeStr(fd, "\x7f"); return }
+    if (key == KEY_ESCAPE) { writeStr(fd, "\x1b"); return }
+
+    // Alt+printable → ESC + key (meta prefix)
+    if (has_alt and !has_ctrl and key >= 32 and key <= 126) {
+        writeStr(fd, "\x1b")
+        writeByte(fd, key)
         return
     }
 

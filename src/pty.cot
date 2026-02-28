@@ -61,6 +61,7 @@ impl Pty {
             // Only async-signal-safe calls here (no malloc/alloc).
             fd_close(master)
             setsid()
+            ioctl_set_ctty(slave)
             dup2(slave, 0)
             dup2(slave, 1)
             dup2(slave, 2)
@@ -73,7 +74,6 @@ impl Pty {
 
         // -- Parent process --
         fd_close(slave)
-        set_nonblocking(master)
 
         return Pty { master_fd: master, child_pid: pid }
     }

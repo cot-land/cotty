@@ -1,0 +1,272 @@
+/// Key Inspector — records key events and renders a diagnostic overlay.
+/// Shows what key events are received and what PTY bytes are sent.
+
+import "std/list"
+import "std/string"
+import "terminal"
+import "cell"
+import "input"
+
+// ============================================================================
+// KeyRecord — a single recorded key event
+// ============================================================================
+
+struct KeyRecord {
+    key: i64,
+    mods: i64,
+    pty_bytes: List(i64),
+    pty_len: i64,
+}
+
+// ============================================================================
+// KeyInspector — overlay display of recent key events
+// ============================================================================
+
+const INSPECTOR_MAX_EVENTS: i64 = 10
+const INSPECTOR_ROWS: i64 = 12
+
+struct KeyInspector {
+    active: bool,
+    events: List(KeyRecord),
+    overlay: TerminalGrid,
+    overlay_cols: i64,
+}
+
+impl KeyInspector {
+    static fn init() KeyInspector {
+        var events: List(KeyRecord) = undefined
+        events.items = 0
+        events.count = 0
+        events.capacity = 0
+
+        return KeyInspector {
+            active: false,
+            events: events,
+            overlay: TerminalGrid.init(INSPECTOR_ROWS, 80),
+            overlay_cols: 80,
+        }
+    }
+
+    fn toggle() void {
+        self.active = !self.active
+        if (self.active) {
+            self.rebuildOverlay()
+        }
+    }
+
+    fn recordEvent(key: i64, mods: i64, bytes: List(i64)) void {
+        if (!self.active) { return }
+
+        const rec = KeyRecord {
+            key: key,
+            mods: mods,
+            pty_bytes: bytes,
+            pty_len: bytes.count,
+        }
+        self.events.append(rec)
+
+        // Trim to max events
+        while (self.events.count > INSPECTOR_MAX_EVENTS) {
+            // Shift events: remove oldest by rebuilding
+            var new_events: List(KeyRecord) = undefined
+            new_events.items = 0
+            new_events.count = 0
+            new_events.capacity = 0
+            var i: i64 = 1
+            while (i < self.events.count) {
+                new_events.append(self.events.get(i))
+                i += 1
+            }
+            self.events = new_events
+        }
+
+        self.rebuildOverlay()
+    }
+
+    fn resizeOverlay(cols: i64) void {
+        self.overlay_cols = cols
+        if (self.active) {
+            self.rebuildOverlay()
+        }
+    }
+
+    fn rebuildOverlay() void {
+        self.overlay = TerminalGrid.init(INSPECTOR_ROWS, self.overlay_cols)
+
+        // Dark gray background for all cells
+        var row: i64 = 0
+        while (row < INSPECTOR_ROWS) {
+            var col: i64 = 0
+            while (col < self.overlay_cols) {
+                const c = self.overlay.getCell(row, col)
+                c.bg_r = 30
+                c.bg_g = 30
+                c.bg_b = 30
+                col += 1
+            }
+            row += 1
+        }
+
+        // Row 0: separator line
+        self.writeOverlayStr(0, 0, "─────────────────────────────────────────────", 120, 120, 120)
+
+        // Row 1: header
+        self.writeOverlayStr(1, 1, "Key Inspector", 255, 200, 50)
+        self.writeOverlayStr(1, 20, "Key", 255, 200, 50)
+        self.writeOverlayStr(1, 32, "Mods", 255, 200, 50)
+        self.writeOverlayStr(1, 40, "PTY Bytes", 255, 200, 50)
+
+        // Rows 2..11: events (most recent at top)
+        var i: i64 = 0
+        while (i < self.events.count and i < INSPECTOR_MAX_EVENTS) {
+            const event_idx = self.events.count - 1 - i
+            const rec = self.events.get(event_idx)
+            const display_row = i + 2
+
+            // Key name column (col 1)
+            var key_name = keyName(rec.key)
+            self.writeOverlayStr(display_row, 1, key_name, 220, 220, 220)
+
+            // Key name again in column 20
+            self.writeOverlayStr(display_row, 20, key_name, 220, 220, 220)
+
+            // Mods column (col 32)
+            var mods_str = modsString(rec.mods)
+            self.writeOverlayStr(display_row, 32, mods_str, 150, 150, 150)
+
+            // PTY bytes column (col 40)
+            var bytes_str = bytesHex(rec.pty_bytes)
+            self.writeOverlayStr(display_row, 40, bytes_str, 100, 220, 100)
+
+            i += 1
+        }
+    }
+
+    fn writeOverlayStr(row: i64, col: i64, s: string, r: i64, g: i64, b: i64) void {
+        var i: i64 = 0
+        while (i < @lenOf(s) and col + i < self.overlay_cols) {
+            const c = self.overlay.getCell(row, col + i)
+            c.codepoint = @intToPtr(*u8, @ptrOf(s) + i).*
+            c.fg_r = r
+            c.fg_g = g
+            c.fg_b = b
+            c.bg_r = 30
+            c.bg_g = 30
+            c.bg_b = 30
+            i += 1
+        }
+    }
+}
+
+// ============================================================================
+// Formatting helpers
+// ============================================================================
+
+fn keyName(key: i64) string {
+    if (key == KEY_TAB) { return "Tab" }
+    if (key == KEY_ENTER) { return "Enter" }
+    if (key == KEY_ESCAPE) { return "Esc" }
+    if (key == KEY_BACKSPACE) { return "Bksp" }
+    if (key == KEY_DELETE) { return "Del" }
+    if (key == KEY_ARROW_UP) { return "Up" }
+    if (key == KEY_ARROW_DOWN) { return "Down" }
+    if (key == KEY_ARROW_LEFT) { return "Left" }
+    if (key == KEY_ARROW_RIGHT) { return "Right" }
+    if (key == KEY_HOME) { return "Home" }
+    if (key == KEY_END) { return "End" }
+    if (key == KEY_PAGE_UP) { return "PgUp" }
+    if (key == KEY_PAGE_DOWN) { return "PgDn" }
+    if (key == KEY_F1) { return "F1" }
+    if (key == KEY_F2) { return "F2" }
+    if (key == KEY_F3) { return "F3" }
+    if (key == KEY_F4) { return "F4" }
+    if (key == KEY_F5) { return "F5" }
+    if (key == KEY_F6) { return "F6" }
+    if (key == KEY_F7) { return "F7" }
+    if (key == KEY_F8) { return "F8" }
+    if (key == KEY_F9) { return "F9" }
+    if (key == KEY_F10) { return "F10" }
+    if (key == KEY_F11) { return "F11" }
+    if (key == KEY_F12) { return "F12" }
+    if (key == ' ') { return "Space" }
+    // Printable ASCII
+    if (key >= 33 and key <= 126) {
+        var sb: StringBuilder = undefined
+        sb.buf = 0
+        sb.len = 0
+        sb.cap = 0
+        sb.appendByte('\'')
+        sb.appendByte(key)
+        sb.appendByte('\'')
+        return sb.toString()
+    }
+    // Unknown key — show as number
+    var sb: StringBuilder = undefined
+    sb.buf = 0
+    sb.len = 0
+    sb.cap = 0
+    sb.append("key:")
+    sb.appendInt(key)
+    return sb.toString()
+}
+
+fn modsString(mods: i64) string {
+    if (mods == 0) { return "-" }
+    var sb: StringBuilder = undefined
+    sb.buf = 0
+    sb.len = 0
+    sb.cap = 0
+    var first: bool = true
+    if ((mods & MOD_CTRL) != 0) {
+        if (!first) { sb.appendByte('+') }
+        sb.appendByte('C')
+        first = false
+    }
+    if ((mods & MOD_SHIFT) != 0) {
+        if (!first) { sb.appendByte('+') }
+        sb.appendByte('S')
+        first = false
+    }
+    if ((mods & MOD_ALT) != 0) {
+        if (!first) { sb.appendByte('+') }
+        sb.appendByte('A')
+        first = false
+    }
+    if ((mods & MOD_SUPER) != 0) {
+        if (!first) { sb.appendByte('+') }
+        sb.appendByte('M')
+        first = false
+    }
+    return sb.toString()
+}
+
+fn bytesHex(bytes: List(i64)) string {
+    if (bytes.count == 0) { return "(none)" }
+    var sb: StringBuilder = undefined
+    sb.buf = 0
+    sb.len = 0
+    sb.cap = 0
+    var i: i64 = 0
+    while (i < bytes.count) {
+        if (i > 0) { sb.appendByte(' ') }
+        const b = bytes.get(i)
+        if (b == 0x1b) {
+            sb.append("ESC")
+        } else if (b < 32) {
+            // Control chars: ^@ through ^_
+            sb.appendByte('^')
+            sb.appendByte(b + 64)
+        } else if (b >= 32 and b <= 126) {
+            sb.appendByte(b)
+        } else {
+            // Non-printable: show hex
+            sb.append("0x")
+            var hi = b / 16
+            var lo = b % 16
+            if (hi < 10) { sb.appendByte('0' + hi) } else { sb.appendByte('a' + hi - 10) }
+            if (lo < 10) { sb.appendByte('0' + lo) } else { sb.appendByte('a' + lo - 10) }
+        }
+        i += 1
+    }
+    return sb.toString()
+}

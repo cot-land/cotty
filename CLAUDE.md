@@ -42,7 +42,12 @@ Example of what NOT to do: implementing terminal grid resize that works correctl
 
 ### 1. Never Invent — Copy Ghostty/Zed Patterns
 
-Cotty's architecture is modeled on Ghostty. When implementing a component, find the Ghostty reference first, then translate to Cot. Don't invent patterns — copy them.
+Cotty's architecture is modeled on Ghostty. When implementing a component, **ALWAYS search the Ghostty reference code FIRST** (`references/ghostty/`), read and understand the implementation, then translate to Cot. Don't invent patterns — copy them.
+
+- **ALWAYS** search Ghostty before writing ANY new feature or handler
+- **NEVER** implement logic without first finding the Ghostty equivalent
+- If you haven't read the Ghostty code, you haven't done the prerequisite step
+- If Ghostty doesn't have a reference for something, say so before proceeding
 
 ### 2. Cot Language Reference Is ~/cotlang/cot
 

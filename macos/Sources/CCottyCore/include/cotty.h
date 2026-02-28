@@ -59,6 +59,11 @@ int64_t cotty_surface_kind(cotty_surface_t surface);
 cotty_surface_t cotty_terminal_surface_new(cotty_app_t app, int64_t rows, int64_t cols);
 void cotty_terminal_surface_free(cotty_surface_t surface);
 
+// Terminal thread synchronization
+void cotty_terminal_lock(cotty_surface_t surface);
+void cotty_terminal_unlock(cotty_surface_t surface);
+int64_t cotty_terminal_notify_fd(cotty_surface_t surface);
+
 // Terminal input
 void cotty_terminal_key(cotty_surface_t surface, int64_t key, int64_t mods);
 
@@ -96,6 +101,21 @@ void cotty_terminal_selection_clear(cotty_surface_t surface);
 int64_t cotty_terminal_selection_active(cotty_surface_t surface);
 int64_t cotty_terminal_selected_text(cotty_surface_t surface);
 int64_t cotty_terminal_selected_text_len(cotty_surface_t surface);
+
+// Mouse tracking
+int64_t cotty_terminal_alt_screen(cotty_surface_t surface);
+int64_t cotty_terminal_mouse_mode(cotty_surface_t surface);
+int64_t cotty_terminal_mouse_format(cotty_surface_t surface);
+void cotty_terminal_mouse_event(cotty_surface_t surface, int64_t button, int64_t col, int64_t row, int64_t pressed);
+void cotty_terminal_scroll(cotty_surface_t surface, int64_t delta, int64_t precise, int64_t cell_height, int64_t col, int64_t row);
+
+// Key Inspector
+void cotty_inspector_toggle(cotty_surface_t surface);
+int64_t cotty_inspector_active(void);
+int64_t cotty_inspector_rows(void);
+int64_t cotty_inspector_cols(void);
+int64_t cotty_inspector_cells_ptr(void);
+void cotty_inspector_resize(int64_t cols);
 
 // Config accessors
 int64_t cotty_config_font_name(void);

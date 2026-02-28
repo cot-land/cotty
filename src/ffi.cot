@@ -2,6 +2,7 @@
 /// Ghostty-style opaque handles: cotty_app_t (pointer) and cotty_surface_t (index).
 /// Action queue for Cot→Swift communication (poll-drain model).
 
+import "std/sys"
 import "app"
 import "surface"
 import "buffer"
@@ -13,12 +14,15 @@ import "cell"
 import "vt_parser"
 import "pty"
 import "config"
+import "inspector"
 
 // ============================================================================
 // Globals
 // ============================================================================
 
 var g_app: App = undefined
+var g_inspector: KeyInspector = undefined
+var g_inspector_init: bool = false
 
 /// Action queue — one pending action, read by Swift after each call.
 var g_action_tag: i64 = 0
@@ -291,14 +295,48 @@ export fn cotty_surface_kind(surface: i64) i64 {
 // ============================================================================
 
 /// Create a new terminal surface with a shell. Returns its index.
+/// Starts the IO reader thread after the surface is in its final memory location.
 export fn cotty_terminal_surface_new(app: i64, rows: i64, cols: i64) i64 {
-    return g_app.addTerminalSurface(rows, cols)
+    const idx = g_app.addTerminalSurface(rows, cols)
+    // Start IO thread now that the surface is at its final address in the list
+    getSurfacePtr(idx).startIoThread()
+    return idx
 }
 
 /// Close the PTY and remove a terminal surface.
+/// Shutdown sequence: close PTY fd → join IO thread → close pipe → destroy mutex.
 export fn cotty_terminal_surface_free(surface: i64) void {
-    getSurfacePtr(surface).shell.close()
+    const sptr = getSurfacePtr(surface)
+    // Close PTY master fd — unblocks IO thread's blocking fd_read
+    sptr.shell.close()
+    // Wait for IO thread to exit
+    sptr.io_thread.join()
+    // Close notification pipe
+    fd_close(sptr.notify_pipe_read)
+    fd_close(sptr.notify_pipe_write)
+    // Destroy mutex
+    sptr.terminal_mutex.destroy()
+    // Remove from surface list
     g_app.removeSurface(surface)
+}
+
+// ============================================================================
+// Terminal thread synchronization
+// ============================================================================
+
+/// Lock the terminal mutex. Call before reading terminal state from main thread.
+export fn cotty_terminal_lock(surface: i64) void {
+    getSurfacePtr(surface).terminal_mutex.lock()
+}
+
+/// Unlock the terminal mutex. Call after reading terminal state from main thread.
+export fn cotty_terminal_unlock(surface: i64) void {
+    getSurfacePtr(surface).terminal_mutex.unlock()
+}
+
+/// Return the notification pipe read fd. Main thread monitors this for render signals.
+export fn cotty_terminal_notify_fd(surface: i64) i64 {
+    return getSurfacePtr(surface).notify_pipe_read
 }
 
 // ============================================================================
@@ -307,9 +345,17 @@ export fn cotty_terminal_surface_free(surface: i64) void {
 
 /// Send a key event to a terminal surface.
 /// Translates abstract KEY_* constant + mods to VT100 bytes and writes to PTY.
+/// Captures sent bytes for the key inspector.
+/// Scrolls viewport to bottom on any keypress.
 export fn cotty_terminal_key(surface: i64, key: i64, mods: i64) void {
     const sptr = getSurfacePtr(surface)
+    sptr.terminal.scrollToBottom()
+    captureBegin()
     keyToTerminalBytes(sptr.shell.master_fd, key, mods, sptr.terminal.mode_app_cursor)
+    const bytes = captureEnd()
+    if (g_inspector_init and g_inspector.active) {
+        g_inspector.recordEvent(key, mods, bytes)
+    }
 }
 
 /// Write raw bytes to the terminal's PTY (sends input to the shell).
@@ -404,11 +450,12 @@ export fn cotty_terminal_cursor_col(surface: i64) i64 {
 }
 
 /// Return 1 if the terminal cursor is visible, 0 otherwise.
+/// Hides cursor when viewport is scrolled up from the active area.
 export fn cotty_terminal_cursor_visible(surface: i64) i64 {
-    if (getSurfacePtr(surface).terminal.cursor_visible) {
-        return 1
-    }
-    return 0
+    const sptr = getSurfacePtr(surface)
+    if (!sptr.terminal.cursor_visible) { return 0 }
+    if (!sptr.terminal.viewportIsBottom()) { return 0 }
+    return 1
 }
 
 /// Return the PTY master fd (for polling with kqueue/epoll).
@@ -421,11 +468,18 @@ export fn cotty_terminal_child_pid(surface: i64) i64 {
     return getSurfacePtr(surface).shell.child_pid
 }
 
-/// Return a pointer to the raw cells buffer for direct access from Swift.
+/// Return a pointer to the visible cells for rendering.
+/// Adjusts for viewport position: when scrolled up, returns scrollback rows.
 /// Each cell is 8 contiguous i64 fields: codepoint, fg_r, fg_g, fg_b, bg_r, bg_g, bg_b, flags.
 /// Stride per cell = 8 * 8 = 64 bytes. Total cells = rows * cols.
 export fn cotty_terminal_cells_ptr(surface: i64) i64 {
-    return getSurfacePtr(surface).terminal.grid.cells.items
+    const sptr = getSurfacePtr(surface)
+    const grid = sptr.terminal.grid
+    var row_offset = grid.active_start
+    if (sptr.terminal.viewport_row >= 0) {
+        row_offset = sptr.terminal.viewport_row
+    }
+    return grid.cells.items + row_offset * grid.cols * @sizeOf(Cell)
 }
 
 // ============================================================================
@@ -574,5 +628,93 @@ export fn cotty_config_sel_fg_g() i64 {
 /// Return the selection foreground blue component.
 export fn cotty_config_sel_fg_b() i64 {
     return g_app.config.sel_fg_b
+}
+
+// ============================================================================
+// Mouse tracking
+// ============================================================================
+
+/// Return 1 if alt screen is active, 0 otherwise.
+export fn cotty_terminal_alt_screen(surface: i64) i64 {
+    if (getSurfacePtr(surface).terminal.mode_alt_screen) { return 1 }
+    return 0
+}
+
+/// Return the current mouse tracking mode (0=off, 1000/1002/1003).
+export fn cotty_terminal_mouse_mode(surface: i64) i64 {
+    return getSurfacePtr(surface).terminal.mode_mouse_tracking
+}
+
+/// Return the current mouse format (0=normal, 1006=SGR).
+export fn cotty_terminal_mouse_format(surface: i64) i64 {
+    return getSurfacePtr(surface).terminal.mode_mouse_format
+}
+
+/// Send a mouse event to the terminal's PTY.
+/// No-ops if mouse tracking is disabled.
+/// button: 0=left, 1=middle, 2=right, 32=drag, 64=wheel up, 65=wheel down.
+/// col, row: 1-indexed. pressed: 1=press/wheel, 0=release.
+export fn cotty_terminal_mouse_event(surface: i64, button: i64, col: i64, row: i64, pressed: i64) void {
+    const sptr = getSurfacePtr(surface)
+    if (sptr.terminal.mode_mouse_tracking == 0) { return }
+    mouseToTerminalBytes(sptr.shell.master_fd, button, col, row, pressed)
+}
+
+/// Handle a scroll wheel event. All logic lives in Cot (ported from Ghostty).
+/// Swift just forwards raw deltas — no logic in the platform layer.
+export fn cotty_terminal_scroll(surface: i64, delta: i64, precise: i64, cell_height: i64, col: i64, row: i64) void {
+    const sptr = getSurfacePtr(surface)
+    sptr.terminal.scrollEvent(sptr.shell.master_fd, delta, precise, cell_height, col, row)
+}
+
+// ============================================================================
+// Key Inspector
+// ============================================================================
+
+fn ensureInspector() void {
+    if (!g_inspector_init) {
+        g_inspector = KeyInspector.init()
+        g_inspector_init = true
+    }
+}
+
+/// Toggle the key inspector overlay.
+export fn cotty_inspector_toggle(surface: i64) void {
+    ensureInspector()
+    // Sync overlay width with terminal cols
+    const sptr = getSurfacePtr(surface)
+    g_inspector.overlay_cols = sptr.terminal.grid.cols
+    g_inspector.toggle()
+}
+
+/// Return 1 if the inspector is active, 0 otherwise.
+export fn cotty_inspector_active() i64 {
+    if (!g_inspector_init) { return 0 }
+    if (g_inspector.active) { return 1 }
+    return 0
+}
+
+/// Return the number of rows in the inspector overlay.
+export fn cotty_inspector_rows() i64 {
+    if (!g_inspector_init) { return 0 }
+    return INSPECTOR_ROWS
+}
+
+/// Return the number of columns in the inspector overlay.
+export fn cotty_inspector_cols() i64 {
+    if (!g_inspector_init) { return 0 }
+    return g_inspector.overlay_cols
+}
+
+/// Return a pointer to the inspector overlay cells buffer.
+export fn cotty_inspector_cells_ptr() i64 {
+    if (!g_inspector_init) { return 0 }
+    return g_inspector.overlay.cells.items
+}
+
+/// Notify the inspector that the terminal width changed.
+export fn cotty_inspector_resize(cols: i64) void {
+    ensureInspector()
+    g_inspector.resizeOverlay(cols)
 }
 

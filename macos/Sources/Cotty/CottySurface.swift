@@ -106,6 +106,12 @@ final class CottySurface {
     var terminalCursorCol: Int { Int(cotty_terminal_cursor_col(handle)) }
     var terminalCursorVisible: Bool { cotty_terminal_cursor_visible(handle) != 0 }
 
+    // MARK: - Terminal Thread Synchronization
+
+    func lockTerminal() { cotty_terminal_lock(handle) }
+    func unlockTerminal() { cotty_terminal_unlock(handle) }
+    var notifyFd: Int32 { Int32(cotty_terminal_notify_fd(handle)) }
+
     // MARK: - Terminal I/O
 
     var ptyFd: Int32 { Int32(cotty_terminal_pty_fd(handle)) }
@@ -165,6 +171,19 @@ final class CottySurface {
         return String(data: data, encoding: .utf8)
     }
 
+    // MARK: - Mouse Tracking
+
+    var mouseTrackingMode: Int64 { cotty_terminal_mouse_mode(handle) }
+    var mouseFormat: Int64 { cotty_terminal_mouse_format(handle) }
+
+    func sendMouseEvent(button: Int64, col: Int, row: Int, pressed: Bool) {
+        cotty_terminal_mouse_event(handle, button, Int64(col), Int64(row), pressed ? 1 : 0)
+    }
+
+    func sendScroll(delta: Int64, precise: Int64, cellHeight: Int64, col: Int, row: Int) {
+        cotty_terminal_scroll(handle, delta, precise, cellHeight, Int64(col), Int64(row))
+    }
+
     // MARK: - Terminal Key Input
 
     func terminalKey(_ key: Int64, mods: Int64) {
@@ -196,6 +215,18 @@ final class CottySurface {
         case 36:  return (13, mods)   // Return → KEY_ENTER
         case 48:  return (9, mods)    // Tab → KEY_TAB
         case 53:  return (27, mods)   // Escape → KEY_ESCAPE
+        case 122: return (264, mods)  // F1 → KEY_F1
+        case 120: return (265, mods)  // F2 → KEY_F2
+        case 99:  return (266, mods)  // F3 → KEY_F3
+        case 118: return (267, mods)  // F4 → KEY_F4
+        case 96:  return (268, mods)  // F5 → KEY_F5
+        case 97:  return (269, mods)  // F6 → KEY_F6
+        case 98:  return (270, mods)  // F7 → KEY_F7
+        case 100: return (271, mods)  // F8 → KEY_F8
+        case 101: return (272, mods)  // F9 → KEY_F9
+        case 109: return (273, mods)  // F10 → KEY_F10
+        case 103: return (274, mods)  // F11 → KEY_F11
+        case 111: return (275, mods)  // F12 → KEY_F12
         default: break
         }
 

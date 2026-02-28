@@ -22,7 +22,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate {
         window.backgroundColor = Theme.shared.background
         window.isReleasedWhenClosed = false
         window.tabbingMode = .preferred
-        window.title = "Terminal"
+        window.title = "Cotty — build 20260228.2"
 
         super.init(window: window)
 
@@ -39,6 +39,12 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate {
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
+
+    // MARK: - Actions
+
+    @objc func toggleKeyInspector(_ sender: Any) {
+        terminalView.toggleInspector()
+    }
 
     // MARK: - NSWindowDelegate
 
