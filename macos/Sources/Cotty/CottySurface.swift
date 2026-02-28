@@ -106,6 +106,15 @@ final class CottySurface {
     var terminalCursorCol: Int { Int(cotty_terminal_cursor_col(handle)) }
     var terminalCursorVisible: Bool { cotty_terminal_cursor_visible(handle) != 0 }
 
+    // MARK: - Terminal Scrollback
+
+    var scrollbackRows: Int { Int(cotty_terminal_scrollback_rows(handle)) }
+    var viewportRow: Int { Int(cotty_terminal_viewport_row(handle)) }
+
+    func setViewport(row: Int) {
+        cotty_terminal_set_viewport(handle, Int64(row))
+    }
+
     // MARK: - Terminal Thread Synchronization
 
     func lockTerminal() { cotty_terminal_lock(handle) }
@@ -170,6 +179,30 @@ final class CottySurface {
         let data = Data(bytes: bufPtr, count: Int(len))
         return String(data: data, encoding: .utf8)
     }
+
+    // MARK: - Terminal Cursor Shape
+
+    var cursorShape: Int { Int(cotty_terminal_cursor_shape(handle)) }
+
+    // MARK: - Terminal Title
+
+    var terminalTitle: String? {
+        let ptr = cotty_terminal_title(handle)
+        let len = cotty_terminal_title_len(handle)
+        guard ptr != 0, len > 0 else { return nil }
+        let bufPtr = UnsafeRawPointer(bitPattern: Int(ptr))!
+        let data = Data(bytes: bufPtr, count: Int(len))
+        return String(data: data, encoding: .utf8)
+    }
+
+    // MARK: - Terminal Bell
+
+    var bellPending: Bool { cotty_terminal_bell(handle) != 0 }
+
+    // MARK: - Terminal Modes
+
+    var bracketedPasteMode: Bool { cotty_terminal_bracketed_paste_mode(handle) != 0 }
+    var focusEventMode: Bool { cotty_terminal_focus_event_mode(handle) != 0 }
 
     // MARK: - Mouse Tracking
 

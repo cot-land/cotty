@@ -240,7 +240,7 @@ private class MetalLayerView: NSView {
 }
 
 /// NSScrollView subclass that shows the overlay scroller on hover.
-private class TrackingScrollView: NSScrollView {
+class TrackingScrollView: NSScrollView {
     private var scrollbarTrackingArea: NSTrackingArea?
 
     override func updateTrackingAreas() {

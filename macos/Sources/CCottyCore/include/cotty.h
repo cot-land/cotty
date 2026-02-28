@@ -94,6 +94,11 @@ int64_t cotty_terminal_child_pid(cotty_surface_t surface);
 // Raw grid buffer access (avoids per-cell FFI overhead)
 int64_t cotty_terminal_cells_ptr(cotty_surface_t surface);
 
+// Terminal scrollback queries
+int64_t cotty_terminal_scrollback_rows(cotty_surface_t surface);
+int64_t cotty_terminal_viewport_row(cotty_surface_t surface);
+void cotty_terminal_set_viewport(cotty_surface_t surface, int64_t row);
+
 // Terminal selection
 void cotty_terminal_selection_start(cotty_surface_t surface, int64_t row, int64_t col);
 void cotty_terminal_selection_update(cotty_surface_t surface, int64_t row, int64_t col);
@@ -108,6 +113,20 @@ int64_t cotty_terminal_mouse_mode(cotty_surface_t surface);
 int64_t cotty_terminal_mouse_format(cotty_surface_t surface);
 void cotty_terminal_mouse_event(cotty_surface_t surface, int64_t button, int64_t col, int64_t row, int64_t pressed);
 void cotty_terminal_scroll(cotty_surface_t surface, int64_t delta, int64_t precise, int64_t cell_height, int64_t col, int64_t row);
+
+// Terminal cursor shape
+int64_t cotty_terminal_cursor_shape(cotty_surface_t surface);
+
+// Terminal title
+int64_t cotty_terminal_title(cotty_surface_t surface);
+int64_t cotty_terminal_title_len(cotty_surface_t surface);
+
+// Terminal bell
+int64_t cotty_terminal_bell(cotty_surface_t surface);
+
+// Terminal bracketed paste and focus events
+int64_t cotty_terminal_bracketed_paste_mode(cotty_surface_t surface);
+int64_t cotty_terminal_focus_event_mode(cotty_surface_t surface);
 
 // Key Inspector
 void cotty_inspector_toggle(cotty_surface_t surface);

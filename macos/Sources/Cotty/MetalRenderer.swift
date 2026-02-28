@@ -236,7 +236,8 @@ class MetalRenderer {
         layer: CAMetalLayer,
         surface: CottySurface,
         cursorVisible: Bool,
-        inspectorActive: Bool = false
+        inspectorActive: Bool = false,
+        cursorShape: Int = 0
     ) {
         guard let drawable = layer.nextDrawable() else { return }
 
@@ -329,13 +330,34 @@ class MetalRenderer {
             }
         }
 
-        // Block cursor
+        // Cursor rendering — shape-aware (block, underline, bar)
         if cursorVisible && cursorRow >= 0 && cursorRow < rows && cursorCol >= 0 && cursorCol < cols {
+            let cursorW: UInt16
+            let cursorH: UInt16
+            let cursorOffY: Int16
+            // cursorShape: 0=default(block), 1=blinking block, 2=steady block,
+            // 3=blinking underline, 4=steady underline, 5=blinking bar, 6=steady bar
+            if cursorShape == 3 || cursorShape == 4 {
+                // Underline: full width, thin height at bottom
+                cursorW = solid.width
+                cursorH = UInt16(max(2, atlas.cellHeight / 8))
+                cursorOffY = Int16(atlas.cellHeight) - Int16(cursorH)
+            } else if cursorShape == 5 || cursorShape == 6 {
+                // Bar: narrow width, full height
+                cursorW = UInt16(max(2, atlas.cellWidth / 8))
+                cursorH = solid.height
+                cursorOffY = 0
+            } else {
+                // Block (0, 1, 2): full cell
+                cursorW = solid.width
+                cursorH = solid.height
+                cursorOffY = 0
+            }
             cells.append(CellData(
                 gridX: UInt16(cursorCol), gridY: UInt16(cursorRow),
                 atlasX: solid.atlasX, atlasY: solid.atlasY,
-                glyphW: solid.width, glyphH: solid.height,
-                offX: 0, offY: 0,
+                glyphW: cursorW, glyphH: cursorH,
+                offX: 0, offY: cursorOffY,
                 r: Theme.shared.cursorR, g: Theme.shared.cursorG, b: Theme.shared.cursorB, a: 0x80
             ))
         }

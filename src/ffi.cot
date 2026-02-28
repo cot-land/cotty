@@ -483,6 +483,33 @@ export fn cotty_terminal_cells_ptr(surface: i64) i64 {
 }
 
 // ============================================================================
+// Terminal scrollback queries
+// ============================================================================
+
+/// Return the number of scrollback rows (lines above the visible area).
+export fn cotty_terminal_scrollback_rows(surface: i64) i64 {
+    return getSurfacePtr(surface).terminal.grid.active_start
+}
+
+/// Return the current viewport row (-1 = following active/bottom).
+export fn cotty_terminal_viewport_row(surface: i64) i64 {
+    return getSurfacePtr(surface).terminal.viewport_row
+}
+
+/// Set the viewport to a specific row. -1 = follow active (bottom).
+/// Used by the native scrollbar to scroll to a position.
+export fn cotty_terminal_set_viewport(surface: i64, row: i64) void {
+    const sptr = getSurfacePtr(surface)
+    if (row < 0) {
+        sptr.terminal.viewport_row = -1
+    } else if (row >= sptr.terminal.grid.active_start) {
+        sptr.terminal.viewport_row = -1
+    } else {
+        sptr.terminal.viewport_row = row
+    }
+}
+
+// ============================================================================
 // Terminal selection
 // ============================================================================
 
@@ -665,6 +692,60 @@ export fn cotty_terminal_mouse_event(surface: i64, button: i64, col: i64, row: i
 export fn cotty_terminal_scroll(surface: i64, delta: i64, precise: i64, cell_height: i64, col: i64, row: i64) void {
     const sptr = getSurfacePtr(surface)
     sptr.terminal.scrollEvent(sptr.shell.master_fd, delta, precise, cell_height, col, row)
+}
+
+// ============================================================================
+// Terminal cursor shape
+// ============================================================================
+
+/// Return the cursor shape (0=default, 1=blinking block, 2=steady block,
+/// 3=blinking underline, 4=steady underline, 5=blinking bar, 6=steady bar).
+export fn cotty_terminal_cursor_shape(surface: i64) i64 {
+    return getSurfacePtr(surface).terminal.cursor_shape
+}
+
+// ============================================================================
+// Terminal title
+// ============================================================================
+
+/// Return a pointer to the terminal title bytes.
+export fn cotty_terminal_title(surface: i64) i64 {
+    return getSurfacePtr(surface).terminal.title_buf
+}
+
+/// Return the byte length of the terminal title.
+export fn cotty_terminal_title_len(surface: i64) i64 {
+    return getSurfacePtr(surface).terminal.title_len
+}
+
+// ============================================================================
+// Terminal bell
+// ============================================================================
+
+/// Return 1 if a bell is pending and clear the flag, 0 otherwise.
+export fn cotty_terminal_bell(surface: i64) i64 {
+    const sptr = getSurfacePtr(surface)
+    if (sptr.terminal.bell_pending) {
+        sptr.terminal.bell_pending = false
+        return 1
+    }
+    return 0
+}
+
+// ============================================================================
+// Terminal bracketed paste and focus events
+// ============================================================================
+
+/// Return 1 if bracketed paste mode is enabled, 0 otherwise.
+export fn cotty_terminal_bracketed_paste_mode(surface: i64) i64 {
+    if (getSurfacePtr(surface).terminal.mode_bracketed_paste) { return 1 }
+    return 0
+}
+
+/// Return 1 if focus event mode is enabled, 0 otherwise.
+export fn cotty_terminal_focus_event_mode(surface: i64) i64 {
+    if (getSurfacePtr(surface).terminal.mode_focus_events) { return 1 }
+    return 0
 }
 
 // ============================================================================

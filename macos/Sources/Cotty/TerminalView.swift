@@ -22,6 +22,11 @@ class TerminalView: NSView {
     private var notifySource: DispatchSourceRead?
     private let notifyBuffer = UnsafeMutablePointer<UInt8>.allocate(capacity: 1024)
 
+    // Scrollbar — transparent NSScrollView overlay (same pattern as EditorView)
+    private let scrollView = TrackingScrollView()
+    private let sizerView = TerminalSizerView()
+    private var ignoreScrollUpdate = false
+
     // Cursor blink
     private var cursorVisible = true
     private var blinkTimer: Timer?
@@ -52,6 +57,35 @@ class TerminalView: NSView {
         metalView.frame = bounds
         metalView.autoresizingMask = [.width, .height]
         addSubview(metalView)
+
+        // Transparent scroll view on top — provides native scrollbar
+        scrollView.drawsBackground = false
+        scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.borderType = .noBorder
+        scrollView.frame = bounds
+        scrollView.autoresizingMask = [.width, .height]
+        // Disable scroll view's own scrolling — we handle scroll events directly
+        scrollView.hasHorizontalScroller = false
+
+        let clipView = FlippedClipView()
+        clipView.drawsBackground = false
+        scrollView.contentView = clipView
+
+        sizerView.terminalView = self
+        sizerView.frame = bounds
+        scrollView.documentView = sizerView
+
+        addSubview(scrollView)
+
+        // Observe scroll position changes from the clip view
+        clipView.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(clipViewBoundsChanged),
+            name: NSView.boundsDidChangeNotification,
+            object: clipView
+        )
     }
 
     override func viewDidMoveToWindow() {
@@ -122,13 +156,102 @@ class TerminalView: NSView {
     private func renderFrame() {
         guard renderer != nil else { return }
         surface.lockTerminal()
+
+        // Check cursor shape for blink behavior
+        let shape = surface.cursorShape
+        let isBlinkingShape = shape == 0 || shape == 1 || shape == 3 || shape == 5
+        let effectiveCursorVisible = (isBlinkingShape ? cursorVisible : true) && surface.terminalCursorVisible
+
         renderer.renderTerminal(
             layer: metalView.metalLayer,
             surface: surface,
-            cursorVisible: cursorVisible && surface.terminalCursorVisible,
-            inspectorActive: cotty_inspector_active() != 0
+            cursorVisible: effectiveCursorVisible,
+            inspectorActive: cotty_inspector_active() != 0,
+            cursorShape: shape
         )
+
+        // Read bell state
+        let bellPending = surface.bellPending
+
+        // Read title
+        let title = surface.terminalTitle
+
+        let scrollback = surface.scrollbackRows
+        let rows = surface.terminalRows
+        let viewportRow = surface.viewportRow
         surface.unlockTerminal()
+
+        // Handle bell
+        if bellPending {
+            NSApp.requestUserAttention(.informationalRequest)
+        }
+
+        // Update window title
+        if let title {
+            windowController?.window?.title = title
+        }
+
+        updateScrollbar(scrollbackRows: scrollback, visibleRows: rows, viewportRow: viewportRow)
+    }
+
+    // MARK: - Scrollbar
+
+    /// Update the sizer view height and scroll position to reflect scrollback state.
+    private func updateScrollbar(scrollbackRows: Int, visibleRows: Int, viewportRow: Int) {
+        guard renderer != nil else { return }
+        let cellH = renderer.cellHeightPoints
+        let visibleHeight = scrollView.contentView.bounds.height
+        let totalRows = scrollbackRows + visibleRows
+        let contentHeight = CGFloat(totalRows) * cellH
+
+        // Update sizer to represent total content
+        let sizerHeight = max(contentHeight, visibleHeight)
+        if abs(sizerView.frame.height - sizerHeight) > 1 {
+            sizerView.frame = NSRect(
+                x: 0, y: 0,
+                width: scrollView.contentView.bounds.width,
+                height: sizerHeight
+            )
+        }
+
+        // Sync scroll position to viewport without triggering clipViewBoundsChanged
+        let targetY: CGFloat
+        if viewportRow < 0 {
+            // At bottom — scroll to end
+            targetY = max(0, sizerHeight - visibleHeight)
+        } else {
+            targetY = CGFloat(viewportRow) * cellH
+        }
+
+        let currentY = scrollView.contentView.bounds.origin.y
+        if abs(currentY - targetY) > 1 {
+            ignoreScrollUpdate = true
+            scrollView.contentView.scroll(to: NSPoint(x: 0, y: targetY))
+            scrollView.reflectScrolledClipView(scrollView.contentView)
+            ignoreScrollUpdate = false
+        }
+    }
+
+    /// When the user drags the scrollbar, map scroll position to viewport row.
+    @objc private func clipViewBoundsChanged(_ notification: Notification) {
+        guard !ignoreScrollUpdate else { return }
+        guard renderer != nil else { return }
+
+        let scrollY = scrollView.contentView.bounds.origin.y
+        let cellH = renderer.cellHeightPoints
+        guard cellH > 0 else { return }
+
+        let row = Int(scrollY / cellH)
+
+        surface.lockTerminal()
+        let scrollback = surface.scrollbackRows
+        if row >= scrollback {
+            surface.setViewport(row: -1)
+        } else {
+            surface.setViewport(row: max(0, row))
+        }
+        surface.unlockTerminal()
+        renderFrame()
     }
 
     // MARK: - Mouse Selection
@@ -212,6 +335,33 @@ class TerminalView: NSView {
     // MARK: - Input Handling
 
     override func keyDown(with event: NSEvent) {
+        // Cmd+V → paste from clipboard
+        if event.modifierFlags.contains(.command) && event.charactersIgnoringModifiers == "v" {
+            guard let pasteString = NSPasteboard.general.string(forType: .string) else { return }
+            // Replace \n with \r for terminal input
+            let termString = pasteString.replacingOccurrences(of: "\n", with: "\r")
+            surface.lockTerminal()
+            let bracketed = surface.bracketedPasteMode
+            surface.unlockTerminal()
+            if bracketed {
+                // Bracketed paste: ESC[200~ content ESC[201~
+                if let data = "\u{1b}[200~".data(using: .utf8) {
+                    surface.terminalWrite(data)
+                }
+                if let data = termString.data(using: .utf8) {
+                    surface.terminalWrite(data)
+                }
+                if let data = "\u{1b}[201~".data(using: .utf8) {
+                    surface.terminalWrite(data)
+                }
+            } else {
+                if let data = termString.data(using: .utf8) {
+                    surface.terminalWrite(data)
+                }
+            }
+            return
+        }
+
         // Cmd+C → copy selection to clipboard
         if event.modifierFlags.contains(.command) && event.charactersIgnoringModifiers == "c" {
             surface.lockTerminal()
@@ -251,6 +401,38 @@ class TerminalView: NSView {
         resetCursorBlink()
     }
 
+    // MARK: - Focus Events
+
+    override func becomeFirstResponder() -> Bool {
+        let result = super.becomeFirstResponder()
+        if result {
+            surface.lockTerminal()
+            let focusMode = surface.focusEventMode
+            surface.unlockTerminal()
+            if focusMode {
+                if let data = "\u{1b}[I".data(using: .utf8) {
+                    surface.terminalWrite(data)
+                }
+            }
+        }
+        return result
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let result = super.resignFirstResponder()
+        if result {
+            surface.lockTerminal()
+            let focusMode = surface.focusEventMode
+            surface.unlockTerminal()
+            if focusMode {
+                if let data = "\u{1b}[O".data(using: .utf8) {
+                    surface.terminalWrite(data)
+                }
+            }
+        }
+        return result
+    }
+
     // MARK: - Cursor Blink
 
     private func startBlinkTimer() {
@@ -266,6 +448,38 @@ class TerminalView: NSView {
         cursorVisible = true
         startBlinkTimer()
     }
+}
+
+// MARK: - Helper Views
+
+/// Transparent document view that provides content height for the scrollbar.
+/// Forwards mouse events through to the terminal view.
+private class TerminalSizerView: NSView {
+    weak var terminalView: TerminalView?
+
+    override var isFlipped: Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(terminalView)
+        terminalView?.mouseDown(with: event)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        terminalView?.mouseDragged(with: event)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        terminalView?.mouseUp(with: event)
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        terminalView?.scrollWheel(with: event)
+    }
+}
+
+/// Flipped clip view for top-left origin scroll coordinates.
+private class FlippedClipView: NSClipView {
+    override var isFlipped: Bool { true }
 }
 
 // MARK: - MetalLayerView (shared with EditorView)

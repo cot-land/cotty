@@ -14,8 +14,10 @@ const VT_GROUND: i64 = 0
 const VT_ESCAPE: i64 = 1
 const VT_CSI_PARAM: i64 = 2
 const VT_OSC_STRING: i64 = 3
+const VT_ESC_INTERMEDIATE: i64 = 4
 
 const MAX_PARAMS: i64 = 16
+const MAX_OSC_LEN: i64 = 4096
 
 // ============================================================================
 // ANSI Color Palette
@@ -63,6 +65,8 @@ struct VtParser {
     intermediate: i64,
     utf8_cp: i64,
     utf8_remaining: i64,
+    esc_intermediate: i64,
+    osc_buf: List(i64),
 }
 
 impl VtParser {
@@ -73,6 +77,11 @@ impl VtParser {
         params.count = 0
         params.capacity = 0
 
+        var osc: List(i64) = undefined
+        osc.items = 0
+        osc.count = 0
+        osc.capacity = 0
+
         return VtParser {
             state: VT_GROUND,
             params: params,
@@ -81,6 +90,8 @@ impl VtParser {
             intermediate: 0,
             utf8_cp: 0,
             utf8_remaining: 0,
+            esc_intermediate: 0,
+            osc_buf: osc,
         }
     }
 
@@ -90,6 +101,10 @@ impl VtParser {
     fn feed(terminal: *TerminalState, b: i64) void {
         // ESC always transitions to escape state, aborts any UTF-8 sequence
         if (b == 0x1B) {
+            // If we were in OSC, dispatch what we have (ESC \ is ST)
+            if (self.state == VT_OSC_STRING) {
+                self.dispatchOsc(terminal)
+            }
             self.state = VT_ESCAPE
             self.utf8_remaining = 0
             return
@@ -126,8 +141,15 @@ impl VtParser {
             self.feedCsiParam(terminal, b)
         } else if (self.state == VT_OSC_STRING) {
             if (b == 0x07) {
+                self.dispatchOsc(terminal)
                 self.state = VT_GROUND
+            } else {
+                if (self.osc_buf.count < MAX_OSC_LEN) {
+                    self.osc_buf.append(b)
+                }
             }
+        } else if (self.state == VT_ESC_INTERMEDIATE) {
+            self.feedEscIntermediate(terminal, b)
         }
     }
 
@@ -150,7 +172,9 @@ impl VtParser {
 
     /// Execute a C0 control character (0x00-0x1F, excluding ESC).
     fn executeC0(terminal: *TerminalState, b: i64) void {
-        if (b == 0x0D) {
+        if (b == 0x07) {
+            terminal.bell()
+        } else if (b == 0x0D) {
             terminal.carriageReturn()
         } else if (b == 0x0A or b == 0x0B or b == 0x0C) {
             terminal.newline()
@@ -158,6 +182,12 @@ impl VtParser {
             terminal.backspace()
         } else if (b == 0x09) {
             terminal.tab()
+        } else if (b == 0x0E) {
+            // SO — Shift Out: activate G1 charset
+            terminal.active_charset = 1
+        } else if (b == 0x0F) {
+            // SI — Shift In: activate G0 charset
+            terminal.active_charset = 0
         }
     }
 
@@ -175,8 +205,17 @@ impl VtParser {
             self.resetParams()
         } else if (b == ']') {
             self.state = VT_OSC_STRING
+            self.osc_buf.count = 0
+        } else if (b == '(' or b == ')' or b == '*' or b == '+') {
+            // Charset designation: ESC ( / ) / * / + → intermediate
+            self.esc_intermediate = b
+            self.state = VT_ESC_INTERMEDIATE
         } else if (b == 'D') {
             terminal.index_()
+            self.state = VT_GROUND
+        } else if (b == 'H') {
+            // HTS — Horizontal Tab Set
+            terminal.tabSet()
             self.state = VT_GROUND
         } else if (b == 'M') {
             terminal.reverseIndex()
@@ -202,6 +241,14 @@ impl VtParser {
             terminal.mode_mouse_format = 0
             terminal.mode_focus_events = false
             terminal.mode_sync_output = false
+            terminal.mode_origin = false
+            terminal.mode_wraparound = true
+            terminal.mode_mouse_alt_scroll = true
+            terminal.charset_g0 = 0
+            terminal.charset_g1 = 0
+            terminal.active_charset = 0
+            terminal.cursor_shape = 0
+            terminal.resetTabstops()
             if (terminal.mode_alt_screen) {
                 terminal.leaveAltScreen()
             }
@@ -212,6 +259,24 @@ impl VtParser {
         } else {
             self.state = VT_GROUND
         }
+    }
+
+    /// Handle final byte of a charset designation sequence (ESC ( / ) / * / + final).
+    fn feedEscIntermediate(terminal: *TerminalState, b: i64) void {
+        var charset: i64 = 0
+        if (b == '0') {
+            charset = 1  // DEC Special Graphics
+        }
+        // b == 'B' → ASCII (charset = 0, the default)
+
+        if (self.esc_intermediate == '(') {
+            terminal.charset_g0 = charset
+        } else if (self.esc_intermediate == ')') {
+            terminal.charset_g1 = charset
+        }
+        // G2/G3 (* / +) could be added but are rarely used
+
+        self.state = VT_GROUND
     }
 
     // -- CSI param state ----------------------------------------------------
@@ -311,6 +376,34 @@ impl VtParser {
                 terminal.sendSecondaryDeviceAttributes()
             } else if (self.intermediate == 0 or self.intermediate == '?') {
                 terminal.sendPrimaryDeviceAttributes()
+            }
+        } else if (ch == 'g') {
+            // TBC — Tab Clear
+            terminal.tabClear(self.rawParam(0, 0))
+        } else if (ch == 'I') {
+            // CHT — Cursor Horizontal Forward Tabulation
+            terminal.tabForward(self.param(0, 1))
+        } else if (ch == 'Z') {
+            // CBT — Cursor Backward Tabulation
+            terminal.tabBackward(self.param(0, 1))
+        } else if (ch == 'b') {
+            // REP — Repeat preceding graphic character
+            if (terminal.previous_char > 0) {
+                var rep_count = self.param(0, 1)
+                while (rep_count > 0) {
+                    terminal.putChar(terminal.previous_char)
+                    rep_count -= 1
+                }
+            }
+        } else if (ch == 'q') {
+            // DECSCUSR — Set Cursor Style (with space intermediate)
+            if (self.intermediate == ' ') {
+                terminal.cursor_shape = self.rawParam(0, 0)
+            }
+        } else if (ch == 'p') {
+            // DECSTR — Soft Terminal Reset (with ! intermediate)
+            if (self.intermediate == '!') {
+                terminal.softReset()
             }
         } else if (ch == 'h' or ch == 'l') {
             self.dispatchMode(terminal, ch == 'h')
@@ -442,6 +535,38 @@ impl VtParser {
         while (i < self.params.count) {
             terminal.setDecMode(self.params.get(i), enable)
             i += 1
+        }
+    }
+
+    // -- OSC dispatch -------------------------------------------------------
+
+    /// Dispatch a complete OSC sequence from osc_buf.
+    fn dispatchOsc(terminal: *TerminalState) void {
+        if (self.osc_buf.count == 0) { return }
+
+        // Parse numeric command before first ';'
+        var cmd: i64 = 0
+        var i: i64 = 0
+        while (i < self.osc_buf.count) {
+            const ch = self.osc_buf.get(i)
+            if (ch == ';') {
+                i += 1
+                break
+            }
+            if (ch >= '0' and ch <= '9') {
+                cmd = cmd * 10 + (ch - '0')
+            }
+            i += 1
+        }
+
+        // i now points to payload start
+        const payload_start = i
+        const payload_len = self.osc_buf.count - payload_start
+
+        if (cmd == 0 or cmd == 2) {
+            terminal.setTitle(self.osc_buf, payload_start, payload_len)
+        } else if (cmd == 7) {
+            terminal.setPwd(self.osc_buf, payload_start, payload_len)
         }
     }
 
