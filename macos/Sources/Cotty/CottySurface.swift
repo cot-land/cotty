@@ -2,7 +2,7 @@ import AppKit
 import CCottyCore
 import Foundation
 
-/// Swift wrapper around the opaque cotty_surface_t handle (a surface index).
+/// Swift wrapper around the opaque cotty_surface_t handle (a stable pointer).
 final class CottySurface {
     weak var app: CottyApp?
     let handle: cotty_surface_t

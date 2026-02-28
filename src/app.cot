@@ -15,7 +15,7 @@ import "message"
 struct App {
     surfaces: List(*Surface),
     config: Config,
-    focused_surface: ?int,
+    focused_surface: ?*Surface,
     running: bool,
     mailbox: List(Message),
 
@@ -33,44 +33,50 @@ struct App {
         }
     }
 
-    /// Add a new empty surface. Returns its index.
-    fn addSurface() int {
-        const idx = self.surfaces.count
-        self.surfaces.append(Surface.init())
+    /// Add a new empty surface. Returns its pointer (the opaque handle).
+    fn addSurface() *Surface {
+        const s = Surface.init()
+        self.surfaces.append(s)
         if (self.focused_surface == null) {
-            self.focused_surface = idx
+            self.focused_surface = s
         }
-        return idx
+        return s
     }
 
-    /// Add a surface from a file path. Returns its index.
-    fn addSurfaceFromFile(path: string) int {
-        const idx = self.surfaces.count
-        self.surfaces.append(Surface.initFromFile(path))
-        self.focused_surface = idx
-        return idx
+    /// Add a surface from a file path. Returns its pointer.
+    fn addSurfaceFromFile(path: string) *Surface {
+        const s = Surface.initFromFile(path)
+        self.surfaces.append(s)
+        self.focused_surface = s
+        return s
     }
 
-    /// Add a terminal surface with the given dimensions. Returns its index.
-    fn addTerminalSurface(rows: i64, cols: i64) int {
-        const idx = self.surfaces.count
-        self.surfaces.append(Surface.initTerminal(rows, cols))
-        self.focused_surface = idx
-        return idx
+    /// Add a terminal surface with the given dimensions. Returns its pointer.
+    fn addTerminalSurface(rows: i64, cols: i64) *Surface {
+        const s = Surface.initTerminal(rows, cols)
+        self.surfaces.append(s)
+        self.focused_surface = s
+        return s
     }
 
-    /// Remove a surface by index. ARC releases the *Surface when removed.
+    /// Remove a surface by pointer. ARC releases the *Surface when removed.
     /// For terminal surfaces, the FFI shutdown path (cotty_terminal_surface_free)
     /// closes PTY, joins IO thread, and cleans up before calling this.
-    fn removeSurface(idx: int) void {
-        if (idx < 0 or idx >= self.surfaces.count) { return }
-        self.surfaces.orderedRemove(idx)
-        if (self.surfaces.count == 0) {
-            self.focused_surface = null
-        } else if (self.focused_surface) |focus| {
-            if (focus >= self.surfaces.count) {
-                self.focused_surface = self.surfaces.count - 1
+    fn removeSurface(ptr: *Surface) void {
+        var i: i64 = 0
+        while (i < self.surfaces.count) {
+            if (@ptrToInt(self.surfaces.get(i)) == @ptrToInt(ptr)) {
+                self.surfaces.orderedRemove(i)
+                if (self.surfaces.count == 0) {
+                    self.focused_surface = null
+                } else if (self.focused_surface) |focus| {
+                    if (@ptrToInt(focus) == @ptrToInt(ptr)) {
+                        self.focused_surface = self.surfaces.get(self.surfaces.count - 1)
+                    }
+                }
+                return
             }
+            i += 1
         }
     }
 
@@ -95,8 +101,8 @@ struct App {
             Message.open_file |path| => {
                 self.addSurfaceFromFile(path)
             },
-            Message.close_surface |idx| => {
-                self.removeSurface(idx)
+            Message.close_surface |ptr_val| => {
+                self.removeSurface(@intToPtr(*Surface, ptr_val))
             },
             Message.quit => {
                 self.running = false
@@ -134,10 +140,10 @@ test "app init" {
 
 test "app add surface" {
     var app = App.init()
-    const idx = app.addSurface()
-    @assertEq(idx, 0)
+    const s = app.addSurface()
     @assertEq(app.surfaceCount(), 1)
-    @assertEq(app.focused_surface.?, 0)
+    @assert(app.focused_surface != null)
+    @assert(@ptrToInt(app.focused_surface.?) == @ptrToInt(s))
 }
 
 test "app add multiple surfaces" {
@@ -150,16 +156,16 @@ test "app add multiple surfaces" {
 
 test "app remove surface" {
     var app = App.init()
+    const s1 = app.addSurface()
     app.addSurface()
-    app.addSurface()
-    app.removeSurface(0)
+    app.removeSurface(s1)
     @assertEq(app.surfaceCount(), 1)
 }
 
 test "app remove last surface clears focus" {
     var app = App.init()
-    app.addSurface()
-    app.removeSurface(0)
+    const s = app.addSurface()
+    app.removeSurface(s)
     @assertEq(app.surfaceCount(), 0)
     @assert(app.focused_surface == null)
 }
@@ -189,9 +195,9 @@ test "app open file message" {
 
 test "app close surface message" {
     var app = App.init()
+    const s = app.addSurface()
     app.addSurface()
-    app.addSurface()
-    app.postMessage(Message.close_surface(0))
+    app.postMessage(Message.close_surface(@ptrToInt(s)))
     app.drainMailbox()
     @assertEq(app.surfaceCount(), 1)
 }

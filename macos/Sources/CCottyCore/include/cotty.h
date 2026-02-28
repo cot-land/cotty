@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-/// Opaque handle types
+/// Opaque handle types (both are pointers cast to int64_t)
 typedef int64_t cotty_app_t;
 typedef int64_t cotty_surface_t;
 

@@ -1,5 +1,5 @@
 /// FFI export layer for libcotty.dylib.
-/// Ghostty-style opaque handles: cotty_app_t (pointer) and cotty_surface_t (index).
+/// Ghostty-style opaque handles: cotty_app_t and cotty_surface_t are both pointers.
 /// Action queue for Cot→Swift communication (poll-drain model).
 
 import "std/sys"
@@ -27,7 +27,7 @@ var g_inspector_init: bool = false
 /// Action queue — one pending action, read by Swift after each call.
 var g_action_tag: i64 = 0
 var g_action_payload: i64 = 0
-var g_action_surface: i64 = -1
+var g_action_surface: i64 = 0
 
 const ACTION_NONE: i64 = 0
 const ACTION_QUIT: i64 = 1
@@ -39,10 +39,10 @@ const ACTION_MARK_DIRTY: i64 = 4
 // Helpers
 // ============================================================================
 
-/// Get a surface pointer by index. Surfaces are heap-allocated via `new`
-/// with ARC — the list stores *Surface references directly.
-fn getSurfacePtr(idx: i64) *Surface {
-    return g_app.surfaces.get(idx)
+/// Cast an opaque surface handle to a *Surface pointer.
+/// Handles are stable pointers to heap-allocated Surfaces (Ghostty pattern).
+fn getSurfacePtr(handle: i64) *Surface {
+    return @intToPtr(*Surface, handle)
 }
 
 // ============================================================================
@@ -109,14 +109,14 @@ export fn cotty_app_action_surface(app: i64) i64 {
 // Surface lifecycle
 // ============================================================================
 
-/// Create a new empty surface. Returns its index (the surface handle).
+/// Create a new empty surface. Returns an opaque pointer handle.
 export fn cotty_surface_new(app: i64) i64 {
-    return g_app.addSurface()
+    return @ptrToInt(g_app.addSurface())
 }
 
-/// Remove a surface by index.
+/// Remove a surface by pointer handle.
 export fn cotty_surface_free(surface: i64) void {
-    g_app.removeSurface(surface)
+    g_app.removeSurface(getSurfacePtr(surface))
 }
 
 // ============================================================================
@@ -294,30 +294,37 @@ export fn cotty_surface_kind(surface: i64) i64 {
 // Terminal surface lifecycle
 // ============================================================================
 
-/// Create a new terminal surface with a shell. Returns its index.
+/// Create a new terminal surface with a shell. Returns an opaque pointer handle.
 /// Starts the IO reader thread after the surface is in its final memory location.
 export fn cotty_terminal_surface_new(app: i64, rows: i64, cols: i64) i64 {
-    const idx = g_app.addTerminalSurface(rows, cols)
+    const s = g_app.addTerminalSurface(rows, cols)
     // Start IO thread now that the surface is at its final address in the list
-    getSurfacePtr(idx).startIoThread()
-    return idx
+    s.startIoThread()
+    return @ptrToInt(s)
 }
 
 /// Close the PTY and remove a terminal surface.
-/// Shutdown sequence: close PTY fd → join IO thread → close pipe → destroy mutex.
+/// Shutdown sequence: kill child → join IO thread → close PTY → close pipe → destroy mutex.
 export fn cotty_terminal_surface_free(surface: i64) void {
     const sptr = getSurfacePtr(surface)
-    // Close PTY master fd — unblocks IO thread's blocking fd_read
-    sptr.shell.close()
-    // Wait for IO thread to exit
+    // Kill child shell — makes PTY master read() return EOF.
+    // On macOS, close() on an fd blocked in read() by another thread
+    // does NOT reliably wake the read, so we must kill the child first.
+    if (sptr.shell.child_pid > 0) {
+        kill(sptr.shell.child_pid, 1)  // SIGHUP = 1
+        waitpid(sptr.shell.child_pid)
+    }
+    // Wait for IO thread to exit (fd_read returns 0 now that child is dead)
     sptr.io_thread.join()
+    // Close PTY master fd
+    sptr.shell.close()
     // Close notification pipe
     fd_close(sptr.notify_pipe_read)
     fd_close(sptr.notify_pipe_write)
     // Destroy mutex
     sptr.terminal_mutex.destroy()
     // Remove from surface list
-    g_app.removeSurface(surface)
+    g_app.removeSurface(sptr)
 }
 
 // ============================================================================
