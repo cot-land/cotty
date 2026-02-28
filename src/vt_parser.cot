@@ -10,11 +10,13 @@ import "cell"
 // Parser States
 // ============================================================================
 
-const VT_GROUND: i64 = 0
-const VT_ESCAPE: i64 = 1
-const VT_CSI_PARAM: i64 = 2
-const VT_OSC_STRING: i64 = 3
-const VT_ESC_INTERMEDIATE: i64 = 4
+const VtState = enum(u8) {
+    Ground,
+    Escape,
+    CsiParam,
+    OscString,
+    EscIntermediate,
+}
 
 const MAX_PARAMS: i64 = 16
 const MAX_OSC_LEN: i64 = 4096
@@ -58,7 +60,7 @@ fn colorFromIndex(idx: i64, palette: List(i64)) (i64, i64, i64) {
 /// State machine parser for VT100/ANSI escape sequences.
 /// Feed bytes one at a time via feed(), or use feedBytes()/feedEsc() helpers.
 struct VtParser {
-    state: i64,
+    state: VtState,
     params: List(i64),
     current_param: i64,
     has_param: bool,
@@ -67,23 +69,14 @@ struct VtParser {
     utf8_remaining: i64,
     esc_intermediate: i64,
     osc_buf: List(i64),
-}
 
-impl VtParser {
     /// Create a parser in the ground state.
     static fn init() VtParser {
-        var params: List(i64) = undefined
-        params.items = 0
-        params.count = 0
-        params.capacity = 0
-
-        var osc: List(i64) = undefined
-        osc.items = 0
-        osc.count = 0
-        osc.capacity = 0
+        var params: List(i64) = .{}
+        var osc: List(i64) = .{}
 
         return VtParser {
-            state: VT_GROUND,
+            state: VtState.Ground,
             params: params,
             current_param: 0,
             has_param: false,
@@ -102,15 +95,15 @@ impl VtParser {
         // ESC always transitions to escape state, aborts any UTF-8 sequence
         if (b == 0x1B) {
             // If we were in OSC, dispatch what we have (ESC \ is ST)
-            if (self.state == VT_OSC_STRING) {
+            if (self.state == VtState.OscString) {
                 self.dispatchOsc(terminal)
             }
-            self.state = VT_ESCAPE
+            self.state = VtState.Escape
             self.utf8_remaining = 0
             return
         }
 
-        if (self.state == VT_GROUND) {
+        if (self.state == VtState.Ground) {
             // UTF-8 continuation byte
             if (self.utf8_remaining > 0 and b >= 0x80 and b <= 0xBF) {
                 self.utf8_cp = (self.utf8_cp << 6) | (b & 0x3F)
@@ -135,30 +128,28 @@ impl VtParser {
             } else if (b < 0x20) {
                 self.executeC0(terminal, b)
             }
-        } else if (self.state == VT_ESCAPE) {
+        } else if (self.state == VtState.Escape) {
             self.feedEscapeState(terminal, b)
-        } else if (self.state == VT_CSI_PARAM) {
+        } else if (self.state == VtState.CsiParam) {
             self.feedCsiParam(terminal, b)
-        } else if (self.state == VT_OSC_STRING) {
+        } else if (self.state == VtState.OscString) {
             if (b == 0x07) {
                 self.dispatchOsc(terminal)
-                self.state = VT_GROUND
+                self.state = VtState.Ground
             } else {
                 if (self.osc_buf.count < MAX_OSC_LEN) {
                     self.osc_buf.append(b)
                 }
             }
-        } else if (self.state == VT_ESC_INTERMEDIATE) {
+        } else if (self.state == VtState.EscIntermediate) {
             self.feedEscIntermediate(terminal, b)
         }
     }
 
     /// Feed each byte of a string through the parser.
     fn feedBytes(terminal: *TerminalState, data: string) void {
-        var i: i64 = 0
-        while (i < @lenOf(data)) {
+        for i in 0..@lenOf(data) {
             self.feed(terminal, charAt(data, i))
-            i += 1
         }
     }
 
@@ -172,92 +163,103 @@ impl VtParser {
 
     /// Execute a C0 control character (0x00-0x1F, excluding ESC).
     fn executeC0(terminal: *TerminalState, b: i64) void {
-        if (b == 0x07) {
-            terminal.bell()
-        } else if (b == 0x0D) {
-            terminal.carriageReturn()
-        } else if (b == 0x0A or b == 0x0B or b == 0x0C) {
-            terminal.newline()
-        } else if (b == 0x08) {
-            terminal.backspace()
-        } else if (b == 0x09) {
-            terminal.tab()
-        } else if (b == 0x0E) {
-            // SO — Shift Out: activate G1 charset
-            terminal.active_charset = 1
-        } else if (b == 0x0F) {
-            // SI — Shift In: activate G0 charset
-            terminal.active_charset = 0
+        switch (b) {
+            0x07 => terminal.bell(),
+            0x0D => terminal.carriageReturn(),
+            0x0A, 0x0B, 0x0C => terminal.newline(),
+            0x08 => terminal.backspace(),
+            0x09 => terminal.tab(),
+            0x0E => {
+                // SO — Shift Out: activate G1 charset
+                terminal.active_charset = 1
+            },
+            0x0F => {
+                // SI — Shift In: activate G0 charset
+                terminal.active_charset = 0
+            },
+            else => {},
         }
     }
 
     // -- ESC state ----------------------------------------------------------
 
-    /// Handle a byte in the VT_ESCAPE state.
+    /// Handle a byte in the Escape state.
     fn feedEscapeState(terminal: *TerminalState, b: i64) void {
         if (b < 0x20) {
             self.executeC0(terminal, b)
             return
         }
 
-        if (b == '[') {
-            self.state = VT_CSI_PARAM
-            self.resetParams()
-        } else if (b == ']') {
-            self.state = VT_OSC_STRING
-            self.osc_buf.count = 0
-        } else if (b == '(' or b == ')' or b == '*' or b == '+') {
-            // Charset designation: ESC ( / ) / * / + → intermediate
-            self.esc_intermediate = b
-            self.state = VT_ESC_INTERMEDIATE
-        } else if (b == 'D') {
-            terminal.index_()
-            self.state = VT_GROUND
-        } else if (b == 'H') {
-            // HTS — Horizontal Tab Set
-            terminal.tabSet()
-            self.state = VT_GROUND
-        } else if (b == 'M') {
-            terminal.reverseIndex()
-            self.state = VT_GROUND
-        } else if (b == '7') {
-            terminal.saveCursor()
-            self.state = VT_GROUND
-        } else if (b == '8') {
-            terminal.restoreCursor()
-            self.state = VT_GROUND
-        } else if (b == 'c') {
-            // RIS — Full Reset
-            terminal.grid.clear()
-            terminal.setCursorPos(0, 0)
-            terminal.resetAttributes()
-            terminal.scroll_top = 0
-            terminal.scroll_bottom = terminal.grid.rows - 1
-            terminal.pending_wrap = false
-            terminal.cursor_visible = true
-            terminal.mode_app_cursor = false
-            terminal.mode_bracketed_paste = false
-            terminal.mode_mouse_tracking = 0
-            terminal.mode_mouse_format = 0
-            terminal.mode_focus_events = false
-            terminal.mode_sync_output = false
-            terminal.mode_origin = false
-            terminal.mode_wraparound = true
-            terminal.mode_mouse_alt_scroll = true
-            terminal.charset_g0 = 0
-            terminal.charset_g1 = 0
-            terminal.active_charset = 0
-            terminal.cursor_shape = 0
-            terminal.resetTabstops()
-            if (terminal.mode_alt_screen) {
-                terminal.leaveAltScreen()
-            }
-            self.state = VT_GROUND
-        } else if (b == '\\') {
-            // ST — String Terminator (ends OSC/DCS)
-            self.state = VT_GROUND
-        } else {
-            self.state = VT_GROUND
+        switch (b) {
+            '[' => {
+                self.state = VtState.CsiParam
+                self.resetParams()
+            },
+            ']' => {
+                self.state = VtState.OscString
+                self.osc_buf.count = 0
+            },
+            '(', ')', '*', '+' => {
+                // Charset designation: ESC ( / ) / * / + -> intermediate
+                self.esc_intermediate = b
+                self.state = VtState.EscIntermediate
+            },
+            'D' => {
+                terminal.index_()
+                self.state = VtState.Ground
+            },
+            'H' => {
+                // HTS — Horizontal Tab Set
+                terminal.tabSet()
+                self.state = VtState.Ground
+            },
+            'M' => {
+                terminal.reverseIndex()
+                self.state = VtState.Ground
+            },
+            '7' => {
+                terminal.saveCursor()
+                self.state = VtState.Ground
+            },
+            '8' => {
+                terminal.restoreCursor()
+                self.state = VtState.Ground
+            },
+            'c' => {
+                // RIS — Full Reset
+                terminal.grid.clear()
+                terminal.setCursorPos(0, 0)
+                terminal.resetAttributes()
+                terminal.scroll_top = 0
+                terminal.scroll_bottom = terminal.grid.rows - 1
+                terminal.pending_wrap = false
+                terminal.cursor_visible = true
+                terminal.mode_app_cursor = false
+                terminal.mode_bracketed_paste = false
+                terminal.mode_mouse_tracking = 0
+                terminal.mode_mouse_format = 0
+                terminal.mode_focus_events = false
+                terminal.mode_sync_output = false
+                terminal.mode_origin = false
+                terminal.mode_wraparound = true
+                terminal.mode_mouse_alt_scroll = true
+                terminal.charset_g0 = 0
+                terminal.charset_g1 = 0
+                terminal.active_charset = 0
+                terminal.cursor_shape = 0
+                terminal.resetTabstops()
+                if (terminal.mode_alt_screen) {
+                    terminal.leaveAltScreen()
+                }
+                self.state = VtState.Ground
+            },
+            '\\' => {
+                // ST — String Terminator (ends OSC/DCS)
+                self.state = VtState.Ground
+            },
+            else => {
+                self.state = VtState.Ground
+            },
         }
     }
 
@@ -267,7 +269,7 @@ impl VtParser {
         if (b == '0') {
             charset = 1  // DEC Special Graphics
         }
-        // b == 'B' → ASCII (charset = 0, the default)
+        // b == 'B' -> ASCII (charset = 0, the default)
 
         if (self.esc_intermediate == '(') {
             terminal.charset_g0 = charset
@@ -276,12 +278,12 @@ impl VtParser {
         }
         // G2/G3 (* / +) could be added but are rarely used
 
-        self.state = VT_GROUND
+        self.state = VtState.Ground
     }
 
     // -- CSI param state ----------------------------------------------------
 
-    /// Handle a byte in the VT_CSI_PARAM state.
+    /// Handle a byte in the CsiParam state.
     fn feedCsiParam(terminal: *TerminalState, b: i64) void {
         if (b >= '0' and b <= '9') {
             self.current_param = self.current_param * 10 + (b - '0')
@@ -296,12 +298,12 @@ impl VtParser {
             }
             self.dispatchCsi(terminal, b)
             self.resetParams()
-            self.state = VT_GROUND
+            self.state = VtState.Ground
         } else if (b < 0x20) {
             self.executeC0(terminal, b)
         } else {
             self.resetParams()
-            self.state = VT_GROUND
+            self.state = VtState.Ground
         }
     }
 
@@ -309,104 +311,109 @@ impl VtParser {
 
     /// Dispatch a complete CSI sequence based on the final byte.
     fn dispatchCsi(terminal: *TerminalState, ch: i64) void {
-        if (ch == 'A') {
-            terminal.cursorUp(self.param(0, 1))
-        } else if (ch == 'B') {
-            terminal.cursorDown(self.param(0, 1))
-        } else if (ch == 'C') {
-            terminal.cursorRight(self.param(0, 1))
-        } else if (ch == 'D') {
-            terminal.cursorLeft(self.param(0, 1))
-        } else if (ch == 'H' or ch == 'f') {
-            // CUP — 1-indexed params, convert to 0-indexed
-            terminal.setCursorPos(self.param(0, 1) - 1, self.param(1, 1) - 1)
-        } else if (ch == 'G') {
-            // CHA — Cursor Horizontal Absolute (1-indexed)
-            terminal.setCursorPos(terminal.cursor_row, self.param(0, 1) - 1)
-        } else if (ch == 'd') {
-            // VPA — Vertical Position Absolute (1-indexed)
-            terminal.setCursorPos(self.param(0, 1) - 1, terminal.cursor_col)
-        } else if (ch == 'J') {
-            terminal.eraseInDisplay(self.rawParam(0, 0))
-        } else if (ch == 'K') {
-            terminal.eraseInLine(self.rawParam(0, 0))
-        } else if (ch == 'L') {
-            terminal.grid.insertLines(terminal.cursor_row, self.param(0, 1), terminal.scroll_bottom)
-        } else if (ch == 'M') {
-            terminal.grid.deleteLines(terminal.cursor_row, self.param(0, 1), terminal.scroll_bottom)
-        } else if (ch == '@') {
-            terminal.insertBlanks(self.param(0, 1))
-        } else if (ch == 'P') {
-            terminal.deleteChars(self.param(0, 1))
-        } else if (ch == 'm') {
-            self.dispatchSgr(terminal)
-        } else if (ch == 'r') {
-            // DECSTBM — 1-indexed params, convert to 0-indexed
-            const top = self.param(0, 1) - 1
-            const bottom = self.param(1, terminal.grid.rows) - 1
-            terminal.setScrollingRegion(top, bottom)
-        } else if (ch == 'S') {
-            // SU — Scroll Up
-            var count = self.param(0, 1)
-            while (count > 0) {
-                terminal.grid.scrollUp(terminal.scroll_top, terminal.scroll_bottom)
-                count -= 1
-            }
-        } else if (ch == 'T') {
-            // SD — Scroll Down
-            var count = self.param(0, 1)
-            while (count > 0) {
-                terminal.grid.scrollDown(terminal.scroll_top, terminal.scroll_bottom)
-                count -= 1
-            }
-        } else if (ch == 'X') {
-            // ECH — Erase Characters (erase N chars at cursor without moving)
-            terminal.eraseChars(self.param(0, 1))
-        } else if (ch == 'n') {
-            // DSR — Device Status Report
-            const dsrParam = self.param(0, 0)
-            if (dsrParam == 5) {
-                terminal.sendOperatingStatus()
-            } else if (dsrParam == 6) {
-                terminal.sendCursorPositionReport()
-            }
-        } else if (ch == 'c') {
-            // DA — Device Attributes
-            if (self.intermediate == '>') {
-                terminal.sendSecondaryDeviceAttributes()
-            } else if (self.intermediate == 0 or self.intermediate == '?') {
-                terminal.sendPrimaryDeviceAttributes()
-            }
-        } else if (ch == 'g') {
-            // TBC — Tab Clear
-            terminal.tabClear(self.rawParam(0, 0))
-        } else if (ch == 'I') {
-            // CHT — Cursor Horizontal Forward Tabulation
-            terminal.tabForward(self.param(0, 1))
-        } else if (ch == 'Z') {
-            // CBT — Cursor Backward Tabulation
-            terminal.tabBackward(self.param(0, 1))
-        } else if (ch == 'b') {
-            // REP — Repeat preceding graphic character
-            if (terminal.previous_char > 0) {
-                var rep_count = self.param(0, 1)
-                while (rep_count > 0) {
-                    terminal.putChar(terminal.previous_char)
-                    rep_count -= 1
+        switch (ch) {
+            'A' => terminal.cursorUp(self.param(0, 1)),
+            'B' => terminal.cursorDown(self.param(0, 1)),
+            'C' => terminal.cursorRight(self.param(0, 1)),
+            'D' => terminal.cursorLeft(self.param(0, 1)),
+            'H', 'f' => {
+                // CUP — 1-indexed params, convert to 0-indexed
+                terminal.setCursorPos(self.param(0, 1) - 1, self.param(1, 1) - 1)
+            },
+            'G' => {
+                // CHA — Cursor Horizontal Absolute (1-indexed)
+                terminal.setCursorPos(terminal.cursor_row, self.param(0, 1) - 1)
+            },
+            'd' => {
+                // VPA — Vertical Position Absolute (1-indexed)
+                terminal.setCursorPos(self.param(0, 1) - 1, terminal.cursor_col)
+            },
+            'J' => terminal.eraseInDisplay(self.rawParam(0, 0)),
+            'K' => terminal.eraseInLine(self.rawParam(0, 0)),
+            'L' => terminal.grid.insertLines(terminal.cursor_row, self.param(0, 1), terminal.scroll_bottom),
+            'M' => terminal.grid.deleteLines(terminal.cursor_row, self.param(0, 1), terminal.scroll_bottom),
+            '@' => terminal.insertBlanks(self.param(0, 1)),
+            'P' => terminal.deleteChars(self.param(0, 1)),
+            'm' => self.dispatchSgr(terminal),
+            'r' => {
+                // DECSTBM — 1-indexed params, convert to 0-indexed
+                const top = self.param(0, 1) - 1
+                const bottom = self.param(1, terminal.grid.rows) - 1
+                terminal.setScrollingRegion(top, bottom)
+            },
+            'S' => {
+                // SU — Scroll Up
+                var count = self.param(0, 1)
+                while (count > 0) {
+                    terminal.grid.scrollUp(terminal.scroll_top, terminal.scroll_bottom)
+                    count -= 1
                 }
-            }
-        } else if (ch == 'q') {
-            // DECSCUSR — Set Cursor Style (with space intermediate)
-            if (self.intermediate == ' ') {
-                terminal.cursor_shape = self.rawParam(0, 0)
-            }
-        } else if (ch == 'p') {
-            // DECSTR — Soft Terminal Reset (with ! intermediate)
-            if (self.intermediate == '!') {
-                terminal.softReset()
-            }
-        } else if (ch == 'h' or ch == 'l') {
-            self.dispatchMode(terminal, ch == 'h')
+            },
+            'T' => {
+                // SD — Scroll Down
+                var count = self.param(0, 1)
+                while (count > 0) {
+                    terminal.grid.scrollDown(terminal.scroll_top, terminal.scroll_bottom)
+                    count -= 1
+                }
+            },
+            'X' => {
+                // ECH — Erase Characters (erase N chars at cursor without moving)
+                terminal.eraseChars(self.param(0, 1))
+            },
+            'n' => {
+                // DSR — Device Status Report
+                const dsrParam = self.param(0, 0)
+                if (dsrParam == 5) {
+                    terminal.sendOperatingStatus()
+                } else if (dsrParam == 6) {
+                    terminal.sendCursorPositionReport()
+                }
+            },
+            'c' => {
+                // DA — Device Attributes
+                if (self.intermediate == '>') {
+                    terminal.sendSecondaryDeviceAttributes()
+                } else if (self.intermediate == 0 or self.intermediate == '?') {
+                    terminal.sendPrimaryDeviceAttributes()
+                }
+            },
+            'g' => {
+                // TBC — Tab Clear
+                terminal.tabClear(self.rawParam(0, 0))
+            },
+            'I' => {
+                // CHT — Cursor Horizontal Forward Tabulation
+                terminal.tabForward(self.param(0, 1))
+            },
+            'Z' => {
+                // CBT — Cursor Backward Tabulation
+                terminal.tabBackward(self.param(0, 1))
+            },
+            'b' => {
+                // REP — Repeat preceding graphic character
+                if (terminal.previous_char > 0) {
+                    var rep_count = self.param(0, 1)
+                    while (rep_count > 0) {
+                        terminal.putChar(terminal.previous_char)
+                        rep_count -= 1
+                    }
+                }
+            },
+            'q' => {
+                // DECSCUSR — Set Cursor Style (with space intermediate)
+                if (self.intermediate == ' ') {
+                    terminal.cursor_shape = self.rawParam(0, 0)
+                }
+            },
+            'p' => {
+                // DECSTR — Soft Terminal Reset (with ! intermediate)
+                if (self.intermediate == '!') {
+                    terminal.softReset()
+                }
+            },
+            'h', 'l' => self.dispatchMode(terminal, ch == 'h'),
+            else => {},
         }
     }
 
@@ -710,7 +717,7 @@ test "CSI D cursor left" {
 test "CSI H cursor position" {
     var p = VtParser.init()
     var t = TerminalState.init(24, 80)
-    // CSI 5;10 H → row 5, col 10 (1-indexed → 4, 9 in 0-indexed)
+    // CSI 5;10 H -> row 5, col 10 (1-indexed -> 4, 9 in 0-indexed)
     p.feedEsc(t, "[5;10H")
     @assertEq(t.cursor_row, 4)
     @assertEq(t.cursor_col, 9)

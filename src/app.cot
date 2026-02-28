@@ -2,32 +2,27 @@
 /// Maps to Ghostty's App.zig — the top-level owner of all surfaces and state.
 
 import "std/list"
+import "std/sys"
 import "std/string"
 import "surface"
 import "config"
 import "message"
 
 /// The core application state. Owns surfaces, config, and the message mailbox.
+/// Surfaces are heap-allocated via `new` with ARC reference counting.
+/// The list stores *Surface pointers — when the list grows, only pointer values
+/// move (not the Surfaces), so IO thread raw pointers remain stable.
 struct App {
-    surfaces: List(Surface),
+    surfaces: List(*Surface),
     config: Config,
     focused_surface: ?int,
     running: bool,
     mailbox: List(Message),
-}
 
-impl App {
     /// Create and initialize the application with default config.
     static fn init() App {
-        var surfaces: List(Surface) = undefined
-        surfaces.items = 0
-        surfaces.count = 0
-        surfaces.capacity = 0
-
-        var mailbox: List(Message) = undefined
-        mailbox.items = 0
-        mailbox.count = 0
-        mailbox.capacity = 0
+        var surfaces: List(*Surface) = .{}
+        var mailbox: List(Message) = .{}
 
         return App {
             surfaces: surfaces,
@@ -64,7 +59,9 @@ impl App {
         return idx
     }
 
-    /// Remove a surface by index.
+    /// Remove a surface by index. ARC releases the *Surface when removed.
+    /// For terminal surfaces, the FFI shutdown path (cotty_terminal_surface_free)
+    /// closes PTY, joins IO thread, and cleans up before calling this.
     fn removeSurface(idx: int) void {
         if (idx < 0 or idx >= self.surfaces.count) { return }
         self.surfaces.orderedRemove(idx)
@@ -84,11 +81,9 @@ impl App {
 
     /// Process all queued mailbox messages.
     fn drainMailbox() void {
-        var i = 0
-        while (i < self.mailbox.count) {
+        for i in 0..self.mailbox.count {
             const msg = self.mailbox.get(i)
             self.handleMessage(msg)
-            i += 1
         }
         // Clear the mailbox
         self.mailbox.count = 0

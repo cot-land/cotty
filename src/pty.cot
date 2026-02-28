@@ -18,9 +18,7 @@ fn slaveFd(fds: i64) i64 {
 struct Pty {
     master_fd: i64,
     child_pid: i64,
-}
 
-impl Pty {
     /// Spawn a shell in a new PTY with the given grid dimensions.
     ///
     /// Opens a pseudo-terminal pair, forks a child process, and execs

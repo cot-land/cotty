@@ -18,21 +18,14 @@ struct Buffer {
     data: List(u8),
     gap_start: int,
     gap_end: int,
-}
 
-impl Buffer {
     /// Create an empty buffer with an initial gap.
     static fn init() Buffer {
-        var data: List(u8) = undefined
-        data.items = 0
-        data.count = 0
-        data.capacity = 0
+        var data: List(u8) = .{}
 
         // Pre-allocate gap
-        var i = 0
-        while (i < INITIAL_GAP_SIZE) {
+        for i in 0..INITIAL_GAP_SIZE {
             data.append(0)
-            i += 1
         }
 
         return Buffer {
@@ -45,11 +38,9 @@ impl Buffer {
     /// Create a buffer initialized with content.
     static fn initWithContent(content: string) Buffer {
         var buf = Buffer.init()
-        var i = 0
         const content_len = @lenOf(content)
-        while (i < content_len) {
+        for i in 0..content_len {
             buf.insert(charAt(content, i))
-            i += 1
         }
         return buf
     }
@@ -94,20 +85,16 @@ impl Buffer {
         if (pos < self.gap_start) {
             // Move gap left: shift bytes from [pos, gap_start) to after gap
             const shift = self.gap_start - pos
-            var i = 0
-            while (i < shift) {
+            for i in 0..shift {
                 self.data.set(self.gap_end - shift + i, self.data.get(pos + i))
-                i += 1
             }
             self.gap_start = pos
             self.gap_end -= shift
         } else {
             // Move gap right: shift bytes from [gap_end, gap_end + (pos - gap_start)) to before gap
             const shift = pos - self.gap_start
-            var i = 0
-            while (i < shift) {
+            for i in 0..shift {
                 self.data.set(self.gap_start + i, self.data.get(self.gap_end + i))
-                i += 1
             }
             self.gap_start += shift
             self.gap_end += shift
@@ -125,13 +112,11 @@ impl Buffer {
     /// Count the number of newline characters in the buffer.
     fn lineCount() int {
         var count = 1
-        var i = 0
         const text_len = self.len()
-        while (i < text_len) {
+        for i in 0..text_len {
             if (self.charAt(i) == '\n') {
                 count += 1
             }
-            i += 1
         }
         return count
     }
@@ -164,10 +149,7 @@ impl Buffer {
         }
 
         // Build the line string
-        var result: List(u8) = undefined
-        result.items = 0
-        result.count = 0
-        result.capacity = 0
+        var result: List(u8) = .{}
         var j = line_start
         while (j < line_end) {
             result.append(@intCast(u8, self.charAt(j)))
@@ -178,15 +160,10 @@ impl Buffer {
 
     /// Convert the entire buffer to a string.
     fn toString() string {
-        var result: List(u8) = undefined
-        result.items = 0
-        result.count = 0
-        result.capacity = 0
-        var i = 0
+        var result: List(u8) = .{}
         const text_len = self.len()
-        while (i < text_len) {
+        for i in 0..text_len {
             result.append(@intCast(u8, self.charAt(i)))
-            i += 1
         }
         return @string(result.items, result.count)
     }
@@ -217,14 +194,12 @@ impl Buffer {
     fn lineStartOffset(line_num: int) int {
         if (line_num == 0) { return 0 }
         var current_line = 0
-        var i = 0
         const text_len = self.len()
-        while (i < text_len) {
+        for i in 0..text_len {
             if (self.charAt(i) == '\n') {
                 current_line += 1
                 if (current_line == line_num) { return i + 1 }
             }
-            i += 1
         }
         return self.len()
     }
@@ -238,11 +213,9 @@ impl Buffer {
         }
 
         // Insert new_gap_size bytes at gap_end
-        var i = 0
-        while (i < new_gap_size) {
+        for i in 0..new_gap_size {
             // Append a zero byte to extend the list
             self.data.append(0)
-            i += 1
         }
 
         // Shift bytes after the gap to make room

@@ -47,15 +47,10 @@ struct Config {
     sel_fg_g: i64,
     sel_fg_b: i64,
     palette: List(i64),
-}
 
-impl Config {
     /// Create a Config with Monokai Remastered defaults.
     static fn init() Config {
-        var palette: List(i64) = undefined
-        palette.items = 0
-        palette.count = 0
-        palette.capacity = 0
+        var palette: List(i64) = .{}
         appendPaletteDefaults(palette)
 
         return Config {
@@ -147,8 +142,7 @@ impl Config {
             const pal_len = jsonArrayLen(pal_val)
             if (pal_len == 16) {
                 cfg.palette.count = 0
-                var i: i64 = 0
-                while (i < 16) {
+                for i in 0..16 {
                     const entry = jsonArrayGet(pal_val, i)
                     if (jsonTag(entry) == JSON_STRING) {
                         const r, g, b = parseHexColor(jsonGetString(entry))
@@ -160,7 +154,6 @@ impl Config {
                         cfg.palette.append(0)
                         cfg.palette.append(0)
                     }
-                    i += 1
                 }
             }
         }
@@ -191,16 +184,14 @@ fn parseHexColor(s: string) (i64, i64, i64) {
 /// Find an environment variable by key name. Returns "" if not found.
 fn findEnvValue(key: string) string {
     const count = environCount()
-    var i: i64 = 0
     const key_len = @lenOf(key)
-    while (i < count) {
+    for i in 0..count {
         const e = env(i)
         if (@lenOf(e) > key_len) {
             if (substring(e, 0, key_len) == key and charAt(e, key_len) == '=') {
                 return substring(e, key_len + 1, @lenOf(e))
             }
         }
-        i += 1
     }
     return ""
 }
@@ -209,10 +200,7 @@ fn findEnvValue(key: string) string {
 fn configPath() string {
     const home = findEnvValue("HOME")
     if (@lenOf(home) == 0) { return "" }
-    var sb: StringBuilder = undefined
-    sb.buf = 0
-    sb.len = 0
-    sb.cap = 0
+    var sb: StringBuilder = .{}
     sb.append(home)
     sb.append("/.config/cotty/config.json")
     return sb.toString()

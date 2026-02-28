@@ -39,10 +39,10 @@ const ACTION_MARK_DIRTY: i64 = 4
 // Helpers
 // ============================================================================
 
-/// Get a mutable pointer to a surface in the list by index.
-/// Same pointer math as List.get() but returns *Surface instead of copying.
+/// Get a surface pointer by index. Surfaces are heap-allocated via `new`
+/// with ARC — the list stores *Surface references directly.
 fn getSurfacePtr(idx: i64) *Surface {
-    return @intToPtr(*Surface, g_app.surfaces.items + idx * @sizeOf(Surface))
+    return g_app.surfaces.get(idx)
 }
 
 // ============================================================================

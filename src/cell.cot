@@ -2,17 +2,6 @@
 
 import "config"
 
-struct Cell {
-    codepoint: i64,
-    fg_r: i64,
-    fg_g: i64,
-    fg_b: i64,
-    bg_r: i64,
-    bg_g: i64,
-    bg_b: i64,
-    flags: i64,
-}
-
 /// Cell flags
 const CELL_BOLD: i64 = 1
 const CELL_UNDERLINE: i64 = 2
@@ -22,7 +11,16 @@ const CELL_DIM: i64 = 16
 const CELL_ITALIC: i64 = 32
 const CELL_STRIKETHROUGH: i64 = 64
 
-impl Cell {
+struct Cell {
+    codepoint: i64,
+    fg_r: i64,
+    fg_g: i64,
+    fg_b: i64,
+    bg_r: i64,
+    bg_g: i64,
+    bg_b: i64,
+    flags: i64,
+
     /// Create an empty cell with default colors.
     static fn init() Cell {
         ensureThemeReady()

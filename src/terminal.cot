@@ -22,31 +22,19 @@ struct TerminalGrid {
     active_start: i64,
     max_scrollback: i64,
     scrollback_enabled: i64,
-}
 
-impl TerminalGrid {
     /// Create a grid of rows * cols blank cells with default colors.
     static fn init(rows: i64, cols: i64) TerminalGrid {
-        var cells: List(Cell) = undefined
-        cells.items = 0
-        cells.count = 0
-        cells.capacity = 0
+        var cells: List(Cell) = .{}
 
-        var i: i64 = 0
         const total = rows * cols
-        while (i < total) {
+        for i in 0..total {
             cells.append(Cell.init())
-            i += 1
         }
 
-        var wraps: List(i64) = undefined
-        wraps.items = 0
-        wraps.count = 0
-        wraps.capacity = 0
-        var w: i64 = 0
-        while (w < rows) {
+        var wraps: List(i64) = .{}
+        for w in 0..rows {
             wraps.append(0)
-            w += 1
         }
 
         return TerminalGrid {
@@ -78,19 +66,15 @@ impl TerminalGrid {
 
     /// Clear the entire grid to default blank cells.
     fn clear() void {
-        var row: i64 = 0
-        while (row < self.rows) {
+        for row in 0..self.rows {
             self.clearLine(row)
-            row += 1
         }
     }
 
     /// Clear a single row to default blank cells and reset its wrap flag.
     fn clearLine(row: i64) void {
-        var col: i64 = 0
-        while (col < self.cols) {
+        for col in 0..self.cols {
             self.getCell(row, col).* = Cell.init()
-            col += 1
         }
         self.setRowWrap(row, 0)
     }
@@ -104,10 +88,8 @@ impl TerminalGrid {
             if (bottom == self.rows - 1) {
                 if (self.scrollback_enabled == 1) {
                     // Append a blank row of cells
-                    var i: i64 = 0
-                    while (i < self.cols) {
+                    for i in 0..self.cols {
                         self.cells.append(Cell.init())
-                        i += 1
                     }
                     // Append a wrap flag for the new row
                     self.row_wrap.append(0)
@@ -188,38 +170,40 @@ impl TerminalGrid {
 /// Map a codepoint in the DEC Special Graphics range (0x60-0x7E) to its
 /// Unicode box-drawing equivalent. From Ghostty's charsets.zig dec_special table.
 fn decSpecialMap(cp: i64) i64 {
-    if (cp == 0x60) { return 0x25C6 }  // ◆
-    if (cp == 0x61) { return 0x2592 }  // ▒
-    if (cp == 0x62) { return 0x2409 }  // HT
-    if (cp == 0x63) { return 0x240C }  // FF
-    if (cp == 0x64) { return 0x240D }  // CR
-    if (cp == 0x65) { return 0x240A }  // LF
-    if (cp == 0x66) { return 0x00B0 }  // °
-    if (cp == 0x67) { return 0x00B1 }  // ±
-    if (cp == 0x68) { return 0x2424 }  // NL
-    if (cp == 0x69) { return 0x240B }  // VT
-    if (cp == 0x6A) { return 0x2518 }  // ┘
-    if (cp == 0x6B) { return 0x2510 }  // ┐
-    if (cp == 0x6C) { return 0x250C }  // ┌
-    if (cp == 0x6D) { return 0x2514 }  // └
-    if (cp == 0x6E) { return 0x253C }  // ┼
-    if (cp == 0x6F) { return 0x23BA }  // ⎺
-    if (cp == 0x70) { return 0x23BB }  // ⎻
-    if (cp == 0x71) { return 0x2500 }  // ─
-    if (cp == 0x72) { return 0x23BC }  // ⎼
-    if (cp == 0x73) { return 0x23BD }  // ⎽
-    if (cp == 0x74) { return 0x251C }  // ├
-    if (cp == 0x75) { return 0x2524 }  // ┤
-    if (cp == 0x76) { return 0x2534 }  // ┴
-    if (cp == 0x77) { return 0x252C }  // ┬
-    if (cp == 0x78) { return 0x2502 }  // │
-    if (cp == 0x79) { return 0x2264 }  // ≤
-    if (cp == 0x7A) { return 0x2265 }  // ≥
-    if (cp == 0x7B) { return 0x03C0 }  // π
-    if (cp == 0x7C) { return 0x2260 }  // ≠
-    if (cp == 0x7D) { return 0x00A3 }  // £
-    if (cp == 0x7E) { return 0x00B7 }  // ·
-    return cp
+    return switch (cp) {
+        0x60 => 0x25C6,  // ◆
+        0x61 => 0x2592,  // ▒
+        0x62 => 0x2409,  // HT
+        0x63 => 0x240C,  // FF
+        0x64 => 0x240D,  // CR
+        0x65 => 0x240A,  // LF
+        0x66 => 0x00B0,  // °
+        0x67 => 0x00B1,  // ±
+        0x68 => 0x2424,  // NL
+        0x69 => 0x240B,  // VT
+        0x6A => 0x2518,  // ┘
+        0x6B => 0x2510,  // ┐
+        0x6C => 0x250C,  // ┌
+        0x6D => 0x2514,  // └
+        0x6E => 0x253C,  // ┼
+        0x6F => 0x23BA,  // ⎺
+        0x70 => 0x23BB,  // ⎻
+        0x71 => 0x2500,  // ─
+        0x72 => 0x23BC,  // ⎼
+        0x73 => 0x23BD,  // ⎽
+        0x74 => 0x251C,  // ├
+        0x75 => 0x2524,  // ┤
+        0x76 => 0x2534,  // ┴
+        0x77 => 0x252C,  // ┬
+        0x78 => 0x2502,  // │
+        0x79 => 0x2264,  // ≤
+        0x7A => 0x2265,  // ≥
+        0x7B => 0x03C0,  // π
+        0x7C => 0x2260,  // ≠
+        0x7D => 0x00A3,  // £
+        0x7E => 0x00B7,  // ·
+        else => cp,
+    }
 }
 
 // ============================================================================
@@ -228,18 +212,13 @@ fn decSpecialMap(cp: i64) i64 {
 
 /// Create a tabstop list with stops set every 8 columns.
 fn initTabstops(cols: i64) List(i64) {
-    var stops: List(i64) = undefined
-    stops.items = 0
-    stops.count = 0
-    stops.capacity = 0
-    var i: i64 = 0
-    while (i < cols) {
+    var stops: List(i64) = .{}
+    for i in 0..cols {
         if (i % 8 == 0) {
             stops.append(1)
         } else {
             stops.append(0)
         }
-        i += 1
     }
     return stops
 }
@@ -312,9 +291,7 @@ struct TerminalState {
     alt_saved_col: i64,
     scroll_accumulator: i64,
     viewport_row: i64,
-}
 
-impl TerminalState {
     /// Create a terminal with the given dimensions and default state.
     static fn init(rows: i64, cols: i64) TerminalState {
         ensureThemeReady()
@@ -485,10 +462,8 @@ impl TerminalState {
                 @intToPtr(*i64, self.tabstops.items + self.cursor_col * @sizeOf(i64)).* = 0
             }
         } else if (mode == 3) {
-            var i: i64 = 0
-            while (i < self.tabstops.count) {
+            for i in 0..self.tabstops.count {
                 @intToPtr(*i64, self.tabstops.items + i * @sizeOf(i64)).* = 0
-                i += 1
             }
         }
     }
@@ -692,10 +667,8 @@ impl TerminalState {
         }
 
         // Fill inserted positions with blank cells
-        var i: i64 = 0
-        while (i < n) {
+        for i in 0..n {
             self.grid.getCell(row, col + i).* = Cell.init()
-            i += 1
         }
     }
 
@@ -727,10 +700,8 @@ impl TerminalState {
         const row = self.cursor_row
         const col = self.cursor_col
         const n = @min(count, self.grid.cols - col)
-        var c = col
-        while (c < col + n) {
-            self.grid.getCell(row, c).* = Cell.init()
-            c += 1
+        for c in 0..n {
+            self.grid.getCell(row, col + c).* = Cell.init()
         }
     }
 
@@ -784,10 +755,8 @@ impl TerminalState {
             self.title_buf = alloc(self.title_buf, len)
         }
         self.title_len = len
-        var i: i64 = 0
-        while (i < len) {
+        for i in 0..len {
             @intToPtr(*u8, self.title_buf + i).* = @intCast(u8, buf.get(start + i))
-            i += 1
         }
     }
 
@@ -824,51 +793,54 @@ impl TerminalState {
 
     /// Set or reset a DEC private mode.
     fn setDecMode(mode: i64, enable: bool) void {
-        if (mode == 1) {
-            self.mode_app_cursor = enable
-        } else if (mode == 6) {
-            self.mode_origin = enable
-            self.setCursorPos(0, 0)
-        } else if (mode == 7) {
-            self.mode_wraparound = enable
-        } else if (mode == 25) {
-            self.cursor_visible = enable
-        } else if (mode == 47 or mode == 1047) {
-            // Legacy alt screen (no cursor save/restore)
-            if (enable) {
-                self.enterAltScreen()
-            } else {
-                self.leaveAltScreen()
-            }
-        } else if (mode == 1048) {
-            // Save/restore cursor only (used alongside 47/1047)
-            if (enable) {
-                self.saveCursor()
-            } else {
-                self.restoreCursor()
-            }
-        } else if (mode == 1049) {
-            if (enable) {
-                self.enterAltScreen()
-            } else {
-                self.leaveAltScreen()
-            }
-        } else if (mode == 1000) {
-            if (enable) { self.mode_mouse_tracking = 1000 } else { self.mode_mouse_tracking = 0 }
-        } else if (mode == 1002) {
-            if (enable) { self.mode_mouse_tracking = 1002 } else { self.mode_mouse_tracking = 0 }
-        } else if (mode == 1003) {
-            if (enable) { self.mode_mouse_tracking = 1003 } else { self.mode_mouse_tracking = 0 }
-        } else if (mode == 1004) {
-            self.mode_focus_events = enable
-        } else if (mode == 1006) {
-            if (enable) { self.mode_mouse_format = 1006 } else { self.mode_mouse_format = 0 }
-        } else if (mode == 2004) {
-            self.mode_bracketed_paste = enable
-        } else if (mode == 2026) {
-            self.mode_sync_output = enable
-        } else if (mode == 1007) {
-            self.mode_mouse_alt_scroll = enable
+        switch (mode) {
+            1 => { self.mode_app_cursor = enable },
+            6 => {
+                self.mode_origin = enable
+                self.setCursorPos(0, 0)
+            },
+            7 => { self.mode_wraparound = enable },
+            25 => { self.cursor_visible = enable },
+            47, 1047 => {
+                // Legacy alt screen (no cursor save/restore)
+                if (enable) {
+                    self.enterAltScreen()
+                } else {
+                    self.leaveAltScreen()
+                }
+            },
+            1048 => {
+                // Save/restore cursor only (used alongside 47/1047)
+                if (enable) {
+                    self.saveCursor()
+                } else {
+                    self.restoreCursor()
+                }
+            },
+            1049 => {
+                if (enable) {
+                    self.enterAltScreen()
+                } else {
+                    self.leaveAltScreen()
+                }
+            },
+            1000 => {
+                if (enable) { self.mode_mouse_tracking = 1000 } else { self.mode_mouse_tracking = 0 }
+            },
+            1002 => {
+                if (enable) { self.mode_mouse_tracking = 1002 } else { self.mode_mouse_tracking = 0 }
+            },
+            1003 => {
+                if (enable) { self.mode_mouse_tracking = 1003 } else { self.mode_mouse_tracking = 0 }
+            },
+            1004 => { self.mode_focus_events = enable },
+            1006 => {
+                if (enable) { self.mode_mouse_format = 1006 } else { self.mode_mouse_format = 0 }
+            },
+            2004 => { self.mode_bracketed_paste = enable },
+            2026 => { self.mode_sync_output = enable },
+            1007 => { self.mode_mouse_alt_scroll = enable },
+            else => {},
         }
     }
 
@@ -1016,15 +988,9 @@ impl TerminalState {
         }
 
         // Temp storage for reflowed output
-        var out_cells: List(Cell) = undefined
-        out_cells.items = 0
-        out_cells.count = 0
-        out_cells.capacity = 0
+        var out_cells: List(Cell) = .{}
 
-        var out_wraps: List(i64) = undefined
-        out_wraps.items = 0
-        out_wraps.count = 0
-        out_wraps.capacity = 0
+        var out_wraps: List(i64) = .{}
 
         var out_rows: i64 = 0
         var new_cursor_row: i64 = 0
@@ -1425,9 +1391,8 @@ var g_capture_init: bool = false
 
 fn captureBegin() void {
     if (!g_capture_init) {
-        g_capture_bytes.items = 0
-        g_capture_bytes.count = 0
-        g_capture_bytes.capacity = 0
+        var init_bytes: List(i64) = .{}
+        g_capture_bytes = init_bytes
         g_capture_init = true
     }
     g_capture_bytes.count = 0
@@ -2289,10 +2254,7 @@ test "selection across rows and text extraction" {
     @assertEq((t.grid.getCell(1, 2).flags & CELL_SELECTED), 0)
 
     // Extract text: "CD\nEF"
-    var buf: List(u8) = undefined
-    buf.items = 0
-    buf.count = 0
-    buf.capacity = 0
+    var buf: List(u8) = .{}
     var i: i64 = 0
     while (i < 64) {
         buf.append(0)

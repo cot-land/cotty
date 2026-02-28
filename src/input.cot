@@ -32,9 +32,7 @@ const InputAction = enum(u8) {
     quit,
     new_surface,
     close_surface,
-}
 
-impl InputAction {
     /// Return a display name for this action.
     fn name() string {
         return switch (self) {
@@ -91,43 +89,39 @@ fn keyToAction(event: KeyEvent) InputAction {
 
     // Ctrl+key shortcuts
     if (has_ctrl) {
-        if (event.key == 's') { return InputAction.save }
-        if (event.key == 'q') { return InputAction.quit }
-        if (event.key == 'n') { return InputAction.new_surface }
-        if (event.key == 'w') { return InputAction.close_surface }
-        if (event.key == 'a') { return InputAction.move_line_start }
-        if (event.key == 'e') { return InputAction.move_line_end }
-        return InputAction.none
+        return switch (event.key) {
+            's' => InputAction.save,
+            'q' => InputAction.quit,
+            'n' => InputAction.new_surface,
+            'w' => InputAction.close_surface,
+            'a' => InputAction.move_line_start,
+            'e' => InputAction.move_line_end,
+            else => InputAction.none,
+        }
     }
 
     // Special keys
-    if (event.key == KEY_BACKSPACE) { return InputAction.delete_back }
-    if (event.key == KEY_DELETE) { return InputAction.delete_forward }
-    if (event.key == KEY_ARROW_LEFT) { return InputAction.move_left }
-    if (event.key == KEY_ARROW_RIGHT) { return InputAction.move_right }
-    if (event.key == KEY_ARROW_UP) { return InputAction.move_up }
-    if (event.key == KEY_ARROW_DOWN) { return InputAction.move_down }
-    if (event.key == KEY_HOME) { return InputAction.move_line_start }
-    if (event.key == KEY_END) { return InputAction.move_line_end }
-    if (event.key == KEY_PAGE_UP) { return InputAction.page_up }
-    if (event.key == KEY_PAGE_DOWN) { return InputAction.page_down }
-
-    // Printable characters (ASCII 32-126)
-    if (event.key >= 32 and event.key <= 126) {
-        return InputAction.insert_char
+    return switch (event.key) {
+        KEY_BACKSPACE => InputAction.delete_back,
+        KEY_DELETE => InputAction.delete_forward,
+        KEY_ARROW_LEFT => InputAction.move_left,
+        KEY_ARROW_RIGHT => InputAction.move_right,
+        KEY_ARROW_UP => InputAction.move_up,
+        KEY_ARROW_DOWN => InputAction.move_down,
+        KEY_HOME => InputAction.move_line_start,
+        KEY_END => InputAction.move_line_end,
+        KEY_PAGE_UP => InputAction.page_up,
+        KEY_PAGE_DOWN => InputAction.page_down,
+        KEY_ENTER => InputAction.insert_char,
+        KEY_TAB => InputAction.insert_char,
+        else => {
+            // Printable characters (ASCII 32-126)
+            if (event.key >= 32 and event.key <= 126) {
+                return InputAction.insert_char
+            }
+            return InputAction.none
+        },
     }
-
-    // Enter key — insert newline
-    if (event.key == KEY_ENTER) {
-        return InputAction.insert_char
-    }
-
-    // Tab key — insert tab
-    if (event.key == KEY_TAB) {
-        return InputAction.insert_char
-    }
-
-    return InputAction.none
 }
 
 // ============================================================================
