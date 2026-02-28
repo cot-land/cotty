@@ -79,6 +79,9 @@ impl Surface {
 
     /// Create a terminal surface with a shell spawned via Cot's PTY.
     static fn initTerminal(rows: i64, cols: i64) Surface {
+        const pty = Pty.spawn(rows, cols)
+        var term = TerminalState.init(rows, cols)
+        term.pty_fd = pty.master_fd
         return Surface {
             kind: SURFACE_TERMINAL,
             buffer: Buffer.init(),
@@ -86,9 +89,9 @@ impl Surface {
             scroll_offset: 0,
             filepath: null,
             dirty: false,
-            terminal: TerminalState.init(rows, cols),
+            terminal: term,
             parser: VtParser.init(),
-            shell: Pty.spawn(rows, cols),
+            shell: pty,
         }
     }
 

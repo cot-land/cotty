@@ -18,6 +18,9 @@ const CELL_BOLD: i64 = 1
 const CELL_UNDERLINE: i64 = 2
 const CELL_INVERSE: i64 = 4
 const CELL_SELECTED: i64 = 8
+const CELL_DIM: i64 = 16
+const CELL_ITALIC: i64 = 32
+const CELL_STRIKETHROUGH: i64 = 64
 
 impl Cell {
     /// Create an empty cell with default colors.

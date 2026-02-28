@@ -104,6 +104,7 @@ final class CottySurface {
 
     var terminalCursorRow: Int { Int(cotty_terminal_cursor_row(handle)) }
     var terminalCursorCol: Int { Int(cotty_terminal_cursor_col(handle)) }
+    var terminalCursorVisible: Bool { cotty_terminal_cursor_visible(handle) != 0 }
 
     // MARK: - Terminal I/O
 

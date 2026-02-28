@@ -80,6 +80,7 @@ int64_t cotty_terminal_cell_flags(cotty_surface_t surface, int64_t row, int64_t 
 // Terminal cursor queries
 int64_t cotty_terminal_cursor_row(cotty_surface_t surface);
 int64_t cotty_terminal_cursor_col(cotty_surface_t surface);
+int64_t cotty_terminal_cursor_visible(cotty_surface_t surface);
 int64_t cotty_terminal_pty_fd(cotty_surface_t surface);
 
 // Terminal child process

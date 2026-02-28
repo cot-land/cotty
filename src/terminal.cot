@@ -156,6 +156,11 @@ struct TerminalState {
     bg_g: i64,
     bg_b: i64,
     bold: bool,
+    dim: bool,
+    italic: bool,
+    underline: bool,
+    inverse: bool,
+    strikethrough: bool,
     default_fg_r: i64,
     default_fg_g: i64,
     default_fg_b: i64,
@@ -172,6 +177,15 @@ struct TerminalState {
     sel_start_col: i64,
     sel_end_row: i64,
     sel_end_col: i64,
+    cursor_visible: bool,
+    mode_alt_screen: bool,
+    mode_app_cursor: bool,
+    mode_bracketed_paste: bool,
+    alt_grid: TerminalGrid,
+    alt_cursor_row: i64,
+    alt_cursor_col: i64,
+    alt_saved_row: i64,
+    alt_saved_col: i64,
 }
 
 impl TerminalState {
@@ -192,6 +206,11 @@ impl TerminalState {
             bg_g: THEME_BG_G,
             bg_b: THEME_BG_B,
             bold: false,
+            dim: false,
+            italic: false,
+            underline: false,
+            inverse: false,
+            strikethrough: false,
             default_fg_r: THEME_FG_R,
             default_fg_g: THEME_FG_G,
             default_fg_b: THEME_FG_B,
@@ -208,6 +227,15 @@ impl TerminalState {
             sel_start_col: 0,
             sel_end_row: 0,
             sel_end_col: 0,
+            cursor_visible: true,
+            mode_alt_screen: false,
+            mode_app_cursor: false,
+            mode_bracketed_paste: false,
+            alt_grid: TerminalGrid.init(0, 0),
+            alt_cursor_row: 0,
+            alt_cursor_col: 0,
+            alt_saved_row: 0,
+            alt_saved_col: 0,
         }
     }
 
@@ -237,9 +265,12 @@ impl TerminalState {
         c.bg_g = self.bg_g
         c.bg_b = self.bg_b
         c.flags = 0
-        if (self.bold) {
-            c.flags = c.flags | CELL_BOLD
-        }
+        if (self.bold) { c.flags = c.flags | CELL_BOLD }
+        if (self.dim) { c.flags = c.flags | CELL_DIM }
+        if (self.italic) { c.flags = c.flags | CELL_ITALIC }
+        if (self.underline) { c.flags = c.flags | CELL_UNDERLINE }
+        if (self.inverse) { c.flags = c.flags | CELL_INVERSE }
+        if (self.strikethrough) { c.flags = c.flags | CELL_STRIKETHROUGH }
 
         if (self.cursor_col >= self.grid.cols - 1) {
             self.pending_wrap = true
@@ -490,6 +521,104 @@ impl TerminalState {
         self.bg_g = self.default_bg_g
         self.bg_b = self.default_bg_b
         self.bold = false
+        self.dim = false
+        self.italic = false
+        self.underline = false
+        self.inverse = false
+        self.strikethrough = false
+    }
+
+    // -- DEC Private Modes --------------------------------------------------
+
+    /// Set or reset a DEC private mode.
+    fn setDecMode(mode: i64, enable: bool) void {
+        if (mode == 1) {
+            self.mode_app_cursor = enable
+        } else if (mode == 25) {
+            self.cursor_visible = enable
+        } else if (mode == 1049) {
+            if (enable) {
+                self.enterAltScreen()
+            } else {
+                self.leaveAltScreen()
+            }
+        } else if (mode == 2004) {
+            self.mode_bracketed_paste = enable
+        }
+    }
+
+    /// Enter alternate screen buffer: save cursor and swap to a fresh grid.
+    fn enterAltScreen() void {
+        if (self.mode_alt_screen) { return }
+        self.alt_cursor_row = self.cursor_row
+        self.alt_cursor_col = self.cursor_col
+        self.alt_saved_row = self.saved_row
+        self.alt_saved_col = self.saved_col
+        self.alt_grid = self.grid
+        self.grid = TerminalGrid.init(self.grid.rows, self.grid.cols)
+        self.cursor_row = 0
+        self.cursor_col = 0
+        self.scroll_top = 0
+        self.scroll_bottom = self.grid.rows - 1
+        self.pending_wrap = false
+        self.mode_alt_screen = true
+    }
+
+    /// Leave alternate screen buffer: restore saved grid and cursor.
+    fn leaveAltScreen() void {
+        if (!self.mode_alt_screen) { return }
+        self.grid = self.alt_grid
+        self.cursor_row = self.alt_cursor_row
+        self.cursor_col = self.alt_cursor_col
+        self.saved_row = self.alt_saved_row
+        self.saved_col = self.alt_saved_col
+        self.scroll_top = 0
+        self.scroll_bottom = self.grid.rows - 1
+        self.pending_wrap = false
+        self.mode_alt_screen = false
+        self.alt_grid = TerminalGrid.init(0, 0)
+    }
+
+    // -- Device Status Report / Device Attributes ---------------------------
+
+    /// Send cursor position report: ESC [ row ; col R (1-indexed).
+    fn sendCursorPositionReport() void {
+        if (self.pty_fd < 0) { return }
+        // Build response: ESC [ Pr ; Pc R
+        writeStr(self.pty_fd, "\x1b[")
+        self.writeDecimal(self.pty_fd, self.cursor_row + 1)
+        writeStr(self.pty_fd, ";")
+        self.writeDecimal(self.pty_fd, self.cursor_col + 1)
+        writeStr(self.pty_fd, "R")
+    }
+
+    /// Send primary device attributes response: ESC [ ? 6 c
+    fn sendPrimaryDeviceAttributes() void {
+        if (self.pty_fd < 0) { return }
+        writeStr(self.pty_fd, "\x1b[?6c")
+    }
+
+    /// Write a decimal integer to an fd as ASCII digits.
+    fn writeDecimal(fd: i64, val: i64) void {
+        if (val == 0) {
+            writeByte(fd, '0')
+            return
+        }
+        // Stack digits (max 5 digits for terminal coords)
+        var digits: i64 = 0
+        var count: i64 = 0
+        var v = val
+        while (v > 0) {
+            digits = digits * 10 + (v % 10)
+            count += 1
+            v = v / 10
+        }
+        // Write digits in correct order
+        while (count > 0) {
+            writeByte(fd, '0' + (digits % 10))
+            digits = digits / 10
+            count -= 1
+        }
     }
 
     // -- Resize -------------------------------------------------------------
@@ -520,6 +649,10 @@ impl TerminalState {
     /// to the new column width. Cursor position is tracked through reflow.
     fn resize(new_rows: i64, new_cols: i64) void {
         if (new_rows == self.grid.rows and new_cols == self.grid.cols) { return }
+        // When in alt screen, also resize the saved main grid
+        if (self.mode_alt_screen and self.alt_grid.rows > 0) {
+            self.alt_grid = TerminalGrid.init(new_rows, new_cols)
+        }
         if (new_cols == self.grid.cols) {
             self.resizeRowsOnly(new_rows)
             return
@@ -840,12 +973,22 @@ fn writeByte(fd: i64, val: i64) void {
 /// Translate a key event into VT100 bytes and write to the given fd.
 /// This is the terminal counterpart of keyToAction — instead of producing
 /// an editor action, it writes the raw byte sequence the shell expects.
-fn keyToTerminalBytes(fd: i64, key: i64, mods: i64) void {
+fn keyToTerminalBytes(fd: i64, key: i64, mods: i64, app_cursor: bool) void {
     // Ctrl+key → control character (0x01-0x1A)
     if ((mods & MOD_CTRL) != 0) {
         if (key >= 'a' and key <= 'z') { writeByte(fd, key - 0x60) }
         if (key >= 'A' and key <= 'Z') { writeByte(fd, key - 0x40) }
         return
+    }
+
+    // Application cursor mode: arrow/home/end send SS3 sequences
+    if (app_cursor) {
+        if (key == KEY_ARROW_UP) { writeStr(fd, "\x1bOA"); return }
+        if (key == KEY_ARROW_DOWN) { writeStr(fd, "\x1bOB"); return }
+        if (key == KEY_ARROW_RIGHT) { writeStr(fd, "\x1bOC"); return }
+        if (key == KEY_ARROW_LEFT) { writeStr(fd, "\x1bOD"); return }
+        if (key == KEY_HOME) { writeStr(fd, "\x1bOH"); return }
+        if (key == KEY_END) { writeStr(fd, "\x1bOF"); return }
     }
 
     // Special keys → VT100 escape sequences

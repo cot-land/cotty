@@ -309,7 +309,7 @@ export fn cotty_terminal_surface_free(surface: i64) void {
 /// Translates abstract KEY_* constant + mods to VT100 bytes and writes to PTY.
 export fn cotty_terminal_key(surface: i64, key: i64, mods: i64) void {
     const sptr = getSurfacePtr(surface)
-    keyToTerminalBytes(sptr.shell.master_fd, key, mods)
+    keyToTerminalBytes(sptr.shell.master_fd, key, mods, sptr.terminal.mode_app_cursor)
 }
 
 /// Write raw bytes to the terminal's PTY (sends input to the shell).
@@ -401,6 +401,14 @@ export fn cotty_terminal_cursor_row(surface: i64) i64 {
 /// Return the terminal cursor column.
 export fn cotty_terminal_cursor_col(surface: i64) i64 {
     return getSurfacePtr(surface).terminal.cursor_col
+}
+
+/// Return 1 if the terminal cursor is visible, 0 otherwise.
+export fn cotty_terminal_cursor_visible(surface: i64) i64 {
+    if (getSurfacePtr(surface).terminal.cursor_visible) {
+        return 1
+    }
+    return 0
 }
 
 /// Return the PTY master fd (for polling with kqueue/epoll).

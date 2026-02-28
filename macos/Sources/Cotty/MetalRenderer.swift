@@ -274,15 +274,30 @@ class MetalRenderer {
 
                 let flags = cellPtr.load(fromByteOffset: 56, as: Int64.self)
 
+                // Apply CELL_INVERSE: swap fg/bg
+                var drawFgR = fg_r, drawFgG = fg_g, drawFgB = fg_b
+                var drawBgR = bg_r, drawBgG = bg_g, drawBgB = bg_b
+                if flags & 4 != 0 {  // CELL_INVERSE
+                    drawFgR = bg_r; drawFgG = bg_g; drawFgB = bg_b
+                    drawBgR = fg_r; drawBgG = fg_g; drawBgB = fg_b
+                }
+
+                // Apply CELL_DIM: halve foreground brightness
+                if flags & 16 != 0 {  // CELL_DIM
+                    drawFgR = drawFgR / 2
+                    drawFgG = drawFgG / 2
+                    drawFgB = drawFgB / 2
+                }
+
                 // Background cell (skip black)
-                if bg_r != 0 || bg_g != 0 || bg_b != 0 {
+                if drawBgR != 0 || drawBgG != 0 || drawBgB != 0 {
                     cells.append(CellData(
                         gridX: UInt16(col), gridY: UInt16(row),
                         atlasX: solid.atlasX, atlasY: solid.atlasY,
                         glyphW: solid.width, glyphH: solid.height,
                         offX: 0, offY: 0,
-                        r: UInt8(clamping: bg_r), g: UInt8(clamping: bg_g),
-                        b: UInt8(clamping: bg_b), a: 0xFF
+                        r: UInt8(clamping: drawBgR), g: UInt8(clamping: drawBgG),
+                        b: UInt8(clamping: drawBgB), a: 0xFF
                     ))
                 }
 
@@ -305,8 +320,8 @@ class MetalRenderer {
                         atlasX: g.atlasX, atlasY: g.atlasY,
                         glyphW: g.width, glyphH: g.height,
                         offX: 0, offY: 0,
-                        r: UInt8(clamping: fg_r), g: UInt8(clamping: fg_g),
-                        b: UInt8(clamping: fg_b), a: 0xFF
+                        r: UInt8(clamping: drawFgR), g: UInt8(clamping: drawFgG),
+                        b: UInt8(clamping: drawFgB), a: 0xFF
                     ))
                 }
             }

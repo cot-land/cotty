@@ -129,7 +129,7 @@ class TerminalView: NSView {
         renderer.renderTerminal(
             layer: metalView.metalLayer,
             surface: surface,
-            cursorVisible: cursorVisible
+            cursorVisible: cursorVisible && surface.terminalCursorVisible
         )
     }
 
