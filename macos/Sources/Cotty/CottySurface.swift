@@ -1,3 +1,4 @@
+import AppKit
 import CCottyCore
 import Foundation
 
@@ -161,6 +162,56 @@ final class CottySurface {
         let bufPtr = UnsafeRawPointer(bitPattern: Int(ptr))!
         let data = Data(bytes: bufPtr, count: Int(len))
         return String(data: data, encoding: .utf8)
+    }
+
+    // MARK: - Terminal Key Input
+
+    func terminalKey(_ key: Int64, mods: Int64) {
+        cotty_terminal_key(handle, key, mods)
+    }
+
+    // MARK: - Key Translation (macOS keyCode → Cot KEY_* constants)
+
+    /// Translate a macOS NSEvent into abstract (key, mods) for Cot.
+    /// Shared by both EditorView and TerminalView.
+    static func translateKeyEvent(_ event: NSEvent) -> (key: Int64, mods: Int64) {
+        var mods: Int64 = 0
+        if event.modifierFlags.contains(.control) { mods |= 1 }  // MOD_CTRL
+        if event.modifierFlags.contains(.shift) { mods |= 2 }    // MOD_SHIFT
+        if event.modifierFlags.contains(.option) { mods |= 4 }   // MOD_ALT
+
+        // Special keys → Cot KEY_* constants
+        switch event.keyCode {
+        case 51:  return (8, mods)    // Backspace → KEY_BACKSPACE
+        case 117: return (127, mods)  // Delete → KEY_DELETE
+        case 123: return (258, mods)  // Left → KEY_ARROW_LEFT
+        case 124: return (259, mods)  // Right → KEY_ARROW_RIGHT
+        case 125: return (257, mods)  // Down → KEY_ARROW_DOWN
+        case 126: return (256, mods)  // Up → KEY_ARROW_UP
+        case 115: return (260, mods)  // Home → KEY_HOME
+        case 119: return (261, mods)  // End → KEY_END
+        case 116: return (262, mods)  // PageUp → KEY_PAGE_UP
+        case 121: return (263, mods)  // PageDown → KEY_PAGE_DOWN
+        case 36:  return (13, mods)   // Return → KEY_ENTER
+        case 48:  return (9, mods)    // Tab → KEY_TAB
+        case 53:  return (27, mods)   // Escape → KEY_ESCAPE
+        default: break
+        }
+
+        // Ctrl+key — use the unmodified character so Cot sees the letter
+        if mods & 1 != 0, let ch = event.charactersIgnoringModifiers?.unicodeScalars.first {
+            return (Int64(ch.value), mods)
+        }
+
+        // Printable characters
+        if let chars = event.characters, !chars.isEmpty {
+            let scalar = chars.unicodeScalars.first!
+            if scalar.value >= 32 && scalar.value <= 126 {
+                return (Int64(scalar.value), mods)
+            }
+        }
+
+        return (0, 0)
     }
 
     // MARK: - Convenience

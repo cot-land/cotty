@@ -8,6 +8,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         cottyApp = CottyApp()
+        Theme.shared.load()
         buildMenuBar()
         newTerminal(self)
         NSApp.activate(ignoringOtherApps: true)
@@ -53,7 +54,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // the correct size (avoids a SIGWINCH race that shows zsh's '%' marker).
         let contentSize = NSSize(width: 800, height: 500)
         let scale = NSScreen.main?.backingScaleFactor ?? 2.0
-        let font = CTFontCreateWithName(Theme.fontName as CFString, Theme.fontSize * scale, nil)
+        let font = CTFontCreateWithName(Theme.shared.fontName as CFString, Theme.shared.fontSize * scale, nil)
         let cellH = (ceil(CTFontGetAscent(font)) + ceil(CTFontGetDescent(font))
                       + ceil(CTFontGetLeading(font))) / scale
         var glyph: CGGlyph = 0
@@ -62,7 +63,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         CTFontGetGlyphsForCharacters(font, &ch, &glyph, 1)
         CTFontGetAdvancesForGlyphs(font, .horizontal, &glyph, &adv, 1)
         let cellW = ceil(adv.width) / scale
-        let pad = Theme.paddingPoints
+        let pad = Theme.shared.paddingPoints
         let cols = max(2, Int((contentSize.width - 2 * pad) / cellW))
         let rows = max(2, Int((contentSize.height - 2 * pad) / cellH))
 

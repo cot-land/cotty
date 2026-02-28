@@ -4,17 +4,8 @@
 import "std/list"
 import "std/sys"
 import "cell"
-
-// ============================================================================
-// Default Colors (Monokai)
-// ============================================================================
-
-const DEFAULT_FG_R: i64 = 248
-const DEFAULT_FG_G: i64 = 248
-const DEFAULT_FG_B: i64 = 242
-const DEFAULT_BG_R: i64 = 39
-const DEFAULT_BG_G: i64 = 40
-const DEFAULT_BG_B: i64 = 34
+import "config"
+import "input"
 
 // ============================================================================
 // TerminalGrid — flat cell storage (rows * cols)
@@ -165,6 +156,13 @@ struct TerminalState {
     bg_g: i64,
     bg_b: i64,
     bold: bool,
+    default_fg_r: i64,
+    default_fg_g: i64,
+    default_fg_b: i64,
+    default_bg_r: i64,
+    default_bg_g: i64,
+    default_bg_b: i64,
+    palette: List(i64),
     scroll_top: i64,
     scroll_bottom: i64,
     pty_fd: i64,
@@ -179,6 +177,7 @@ struct TerminalState {
 impl TerminalState {
     /// Create a terminal with the given dimensions and default state.
     static fn init(rows: i64, cols: i64) TerminalState {
+        ensureThemeReady()
         return TerminalState {
             grid: TerminalGrid.init(rows, cols),
             cursor_row: 0,
@@ -186,13 +185,20 @@ impl TerminalState {
             saved_row: 0,
             saved_col: 0,
             pending_wrap: false,
-            fg_r: DEFAULT_FG_R,
-            fg_g: DEFAULT_FG_G,
-            fg_b: DEFAULT_FG_B,
-            bg_r: DEFAULT_BG_R,
-            bg_g: DEFAULT_BG_G,
-            bg_b: DEFAULT_BG_B,
+            fg_r: THEME_FG_R,
+            fg_g: THEME_FG_G,
+            fg_b: THEME_FG_B,
+            bg_r: THEME_BG_R,
+            bg_g: THEME_BG_G,
+            bg_b: THEME_BG_B,
             bold: false,
+            default_fg_r: THEME_FG_R,
+            default_fg_g: THEME_FG_G,
+            default_fg_b: THEME_FG_B,
+            default_bg_r: THEME_BG_R,
+            default_bg_g: THEME_BG_G,
+            default_bg_b: THEME_BG_B,
+            palette: THEME_PALETTE,
             scroll_top: 0,
             scroll_bottom: rows - 1,
             pty_fd: -1,
@@ -477,12 +483,12 @@ impl TerminalState {
 
     /// Reset all SGR attributes to defaults.
     fn resetAttributes() void {
-        self.fg_r = DEFAULT_FG_R
-        self.fg_g = DEFAULT_FG_G
-        self.fg_b = DEFAULT_FG_B
-        self.bg_r = DEFAULT_BG_R
-        self.bg_g = DEFAULT_BG_G
-        self.bg_b = DEFAULT_BG_B
+        self.fg_r = self.default_fg_r
+        self.fg_g = self.default_fg_g
+        self.fg_b = self.default_fg_b
+        self.bg_r = self.default_bg_r
+        self.bg_g = self.default_bg_g
+        self.bg_b = self.default_bg_b
         self.bold = false
     }
 
@@ -814,6 +820,63 @@ impl TerminalState {
 }
 
 // ============================================================================
+// Terminal key input → VT100 bytes
+// ============================================================================
+
+/// Write a string to an fd.
+fn writeStr(fd: i64, s: string) void {
+    fd_write(fd, @ptrOf(s), @lenOf(s))
+}
+
+/// Write a single byte to an fd.
+var g_key_byte: i64 = 0
+
+fn writeByte(fd: i64, val: i64) void {
+    if (g_key_byte == 0) { g_key_byte = alloc(0, 1) }
+    @intToPtr(*u8, g_key_byte).* = @intCast(u8, val)
+    fd_write(fd, g_key_byte, 1)
+}
+
+/// Translate a key event into VT100 bytes and write to the given fd.
+/// This is the terminal counterpart of keyToAction — instead of producing
+/// an editor action, it writes the raw byte sequence the shell expects.
+fn keyToTerminalBytes(fd: i64, key: i64, mods: i64) void {
+    // Ctrl+key → control character (0x01-0x1A)
+    if ((mods & MOD_CTRL) != 0) {
+        if (key >= 'a' and key <= 'z') { writeByte(fd, key - 0x60) }
+        if (key >= 'A' and key <= 'Z') { writeByte(fd, key - 0x40) }
+        return
+    }
+
+    // Special keys → VT100 escape sequences
+    const seq = switch (key) {
+        KEY_ENTER => "\r",
+        KEY_TAB => "\t",
+        KEY_BACKSPACE => "\x7f",
+        KEY_ESCAPE => "\x1b",
+        KEY_ARROW_UP => "\x1b[A",
+        KEY_ARROW_DOWN => "\x1b[B",
+        KEY_ARROW_RIGHT => "\x1b[C",
+        KEY_ARROW_LEFT => "\x1b[D",
+        KEY_HOME => "\x1b[H",
+        KEY_END => "\x1b[F",
+        KEY_DELETE => "\x1b[3~",
+        KEY_PAGE_UP => "\x1b[5~",
+        KEY_PAGE_DOWN => "\x1b[6~",
+        else => "",
+    }
+    if (@lenOf(seq) > 0) {
+        writeStr(fd, seq)
+        return
+    }
+
+    // Printable ASCII → write the byte directly
+    if (key >= 32 and key <= 126) {
+        writeByte(fd, key)
+    }
+}
+
+// ============================================================================
 // Tests — Grid
 // ============================================================================
 
@@ -867,8 +930,8 @@ test "grid scrollUp preserves default colors" {
     var g = TerminalGrid.init(3, 4)
     g.getCell(0, 0).codepoint = 'A'
     g.scrollUp(0, 2)
-    @assertEq(g.getCell(2, 0).fg_r, DEFAULT_FG_R)
-    @assertEq(g.getCell(2, 0).bg_r, DEFAULT_BG_R)
+    @assertEq(g.getCell(2, 0).fg_r, 217)
+    @assertEq(g.getCell(2, 0).bg_r, 12)
 }
 
 test "grid scrollDown shifts content" {
@@ -1222,9 +1285,9 @@ test "resetAttributes restores defaults" {
     t.fg_b = 0
     t.bold = true
     t.resetAttributes()
-    @assertEq(t.fg_r, DEFAULT_FG_R)
-    @assertEq(t.fg_g, DEFAULT_FG_G)
-    @assertEq(t.fg_b, DEFAULT_FG_B)
+    @assertEq(t.fg_r, t.default_fg_r)
+    @assertEq(t.fg_g, t.default_fg_g)
+    @assertEq(t.fg_b, t.default_fg_b)
     @assertEq(t.bold, false)
 }
 

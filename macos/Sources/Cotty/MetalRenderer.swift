@@ -43,8 +43,8 @@ class MetalRenderer {
         self.commandQueue = device.makeCommandQueue()!
 
         // Create atlas at display resolution using Theme font
-        let fontSize = Theme.fontSize * scaleFactor
-        let font = CTFontCreateWithName(Theme.fontName as CFString, fontSize, nil)
+        let fontSize = Theme.shared.fontSize * scaleFactor
+        let font = CTFontCreateWithName(Theme.shared.fontName as CFString, fontSize, nil)
         self.atlas = GlyphAtlas(device: device, font: font)
 
         // Compile shaders from source
@@ -130,7 +130,7 @@ class MetalRenderer {
         let drawW = Float(layer.drawableSize.width)
         let drawH = Float(layer.drawableSize.height)
         let scale = Float(layer.contentsScale)
-        let pad = Float(Theme.paddingPoints) * scale
+        let pad = Float(Theme.shared.paddingPoints) * scale
 
         let cellW = Float(atlas.cellWidth)
         let cellH = Float(atlas.cellHeight)
@@ -153,13 +153,13 @@ class MetalRenderer {
             let lineStart = surface.lineStartOffset(lineIdx)
             for col in 0..<lineLen {
                 let ch = surface.charAt(lineStart + col)
-                let g = atlas.lookup(ch)
+                let g = atlas.lookup(UInt32(ch))
                 cells.append(CellData(
                     gridX: UInt16(col), gridY: UInt16(row),
                     atlasX: g.atlasX, atlasY: g.atlasY,
                     glyphW: g.width, glyphH: g.height,
                     offX: 0, offY: 0,
-                    r: Theme.fgR, g: Theme.fgG, b: Theme.fgB, a: 0xFF
+                    r: Theme.shared.fgR, g: Theme.shared.fgG, b: Theme.shared.fgB, a: 0xFF
                 ))
             }
         }
@@ -176,7 +176,7 @@ class MetalRenderer {
                 glyphW: UInt16(max(2, atlas.cellWidth / 8)),
                 glyphH: solid.height,
                 offX: 0, offY: 0,
-                r: Theme.cursorR, g: Theme.cursorG, b: Theme.cursorB, a: 0xFF
+                r: Theme.shared.cursorR, g: Theme.shared.cursorG, b: Theme.shared.cursorB, a: 0xFF
             ))
         }
 
@@ -200,7 +200,7 @@ class MetalRenderer {
         passDesc.colorAttachments[0].loadAction = .clear
         passDesc.colorAttachments[0].storeAction = .store
         passDesc.colorAttachments[0].clearColor = MTLClearColor(
-            red: Theme.bgR, green: Theme.bgG, blue: Theme.bgB, alpha: 1.0
+            red: Theme.shared.bgR, green: Theme.shared.bgG, blue: Theme.shared.bgB, alpha: 1.0
         )
 
         let cmdBuf = commandQueue.makeCommandBuffer()!
@@ -241,7 +241,7 @@ class MetalRenderer {
         let drawW = Float(layer.drawableSize.width)
         let drawH = Float(layer.drawableSize.height)
         let scale = Float(layer.contentsScale)
-        let pad = Float(Theme.paddingPoints) * scale
+        let pad = Float(Theme.shared.paddingPoints) * scale
 
         let cellW = Float(atlas.cellWidth)
         let cellH = Float(atlas.cellHeight)
@@ -293,13 +293,13 @@ class MetalRenderer {
                         atlasX: solid.atlasX, atlasY: solid.atlasY,
                         glyphW: solid.width, glyphH: solid.height,
                         offX: 0, offY: 0,
-                        r: Theme.selR, g: Theme.selG, b: Theme.selB, a: Theme.selA
+                        r: Theme.shared.selR, g: Theme.shared.selG, b: Theme.shared.selB, a: Theme.shared.selA
                     ))
                 }
 
                 // Foreground glyph
-                if codepoint >= 32 && codepoint <= 126 {
-                    let g = atlas.lookup(UInt8(codepoint))
+                if codepoint >= 32 {
+                    let g = atlas.lookup(UInt32(codepoint))
                     cells.append(CellData(
                         gridX: UInt16(col), gridY: UInt16(row),
                         atlasX: g.atlasX, atlasY: g.atlasY,
@@ -319,7 +319,7 @@ class MetalRenderer {
                 atlasX: solid.atlasX, atlasY: solid.atlasY,
                 glyphW: solid.width, glyphH: solid.height,
                 offX: 0, offY: 0,
-                r: Theme.cursorR, g: Theme.cursorG, b: Theme.cursorB, a: 0x80
+                r: Theme.shared.cursorR, g: Theme.shared.cursorG, b: Theme.shared.cursorB, a: 0x80
             ))
         }
 
@@ -341,7 +341,7 @@ class MetalRenderer {
         passDesc.colorAttachments[0].loadAction = .clear
         passDesc.colorAttachments[0].storeAction = .store
         passDesc.colorAttachments[0].clearColor = MTLClearColor(
-            red: Theme.bgR, green: Theme.bgG, blue: Theme.bgB, alpha: 1.0
+            red: Theme.shared.bgR, green: Theme.shared.bgG, blue: Theme.shared.bgB, alpha: 1.0
         )
 
         let cmdBuf = commandQueue.makeCommandBuffer()!

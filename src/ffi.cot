@@ -12,6 +12,7 @@ import "terminal"
 import "cell"
 import "vt_parser"
 import "pty"
+import "config"
 
 // ============================================================================
 // Globals
@@ -47,6 +48,11 @@ fn getSurfacePtr(idx: i64) *Surface {
 /// Create and initialize the global app. Returns opaque app handle.
 export fn cotty_app_new() i64 {
     g_app = App.init()
+    const path = configPath()
+    if (@lenOf(path) > 0) {
+        g_app.config = Config.loadFromFile(path)
+    }
+    initThemeDefaults(g_app.config)
     return @ptrToInt(&g_app)
 }
 
@@ -299,6 +305,13 @@ export fn cotty_terminal_surface_free(surface: i64) void {
 // Terminal I/O
 // ============================================================================
 
+/// Send a key event to a terminal surface.
+/// Translates abstract KEY_* constant + mods to VT100 bytes and writes to PTY.
+export fn cotty_terminal_key(surface: i64, key: i64, mods: i64) void {
+    const sptr = getSurfacePtr(surface)
+    keyToTerminalBytes(sptr.shell.master_fd, key, mods)
+}
+
 /// Write raw bytes to the terminal's PTY (sends input to the shell).
 export fn cotty_terminal_write(surface: i64, ptr: *u8, len: i64) void {
     const sptr = getSurfacePtr(surface)
@@ -455,3 +468,103 @@ export fn cotty_terminal_selected_text(surface: i64) i64 {
 export fn cotty_terminal_selected_text_len(surface: i64) i64 {
     return g_sel_len
 }
+
+// ============================================================================
+// Config accessors
+// ============================================================================
+
+/// Return a pointer to the font name string bytes.
+export fn cotty_config_font_name() i64 {
+    return @ptrOf(g_app.config.font_name)
+}
+
+/// Return the byte length of the font name string.
+export fn cotty_config_font_name_len() i64 {
+    return @lenOf(g_app.config.font_name)
+}
+
+/// Return the configured font size.
+export fn cotty_config_font_size() i64 {
+    return g_app.config.font_size
+}
+
+/// Return the configured padding in points.
+export fn cotty_config_padding() i64 {
+    return g_app.config.padding
+}
+
+/// Return the background color red component.
+export fn cotty_config_bg_r() i64 {
+    return g_app.config.bg_r
+}
+
+/// Return the background color green component.
+export fn cotty_config_bg_g() i64 {
+    return g_app.config.bg_g
+}
+
+/// Return the background color blue component.
+export fn cotty_config_bg_b() i64 {
+    return g_app.config.bg_b
+}
+
+/// Return the foreground color red component.
+export fn cotty_config_fg_r() i64 {
+    return g_app.config.fg_r
+}
+
+/// Return the foreground color green component.
+export fn cotty_config_fg_g() i64 {
+    return g_app.config.fg_g
+}
+
+/// Return the foreground color blue component.
+export fn cotty_config_fg_b() i64 {
+    return g_app.config.fg_b
+}
+
+/// Return the cursor color red component.
+export fn cotty_config_cursor_r() i64 {
+    return g_app.config.cursor_r
+}
+
+/// Return the cursor color green component.
+export fn cotty_config_cursor_g() i64 {
+    return g_app.config.cursor_g
+}
+
+/// Return the cursor color blue component.
+export fn cotty_config_cursor_b() i64 {
+    return g_app.config.cursor_b
+}
+
+/// Return the selection background red component.
+export fn cotty_config_sel_bg_r() i64 {
+    return g_app.config.sel_bg_r
+}
+
+/// Return the selection background green component.
+export fn cotty_config_sel_bg_g() i64 {
+    return g_app.config.sel_bg_g
+}
+
+/// Return the selection background blue component.
+export fn cotty_config_sel_bg_b() i64 {
+    return g_app.config.sel_bg_b
+}
+
+/// Return the selection foreground red component.
+export fn cotty_config_sel_fg_r() i64 {
+    return g_app.config.sel_fg_r
+}
+
+/// Return the selection foreground green component.
+export fn cotty_config_sel_fg_g() i64 {
+    return g_app.config.sel_fg_g
+}
+
+/// Return the selection foreground blue component.
+export fn cotty_config_sel_fg_b() i64 {
+    return g_app.config.sel_fg_b
+}
+

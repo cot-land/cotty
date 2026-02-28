@@ -1,5 +1,7 @@
 /// Terminal cell: a single character with foreground/background colors and flags.
 
+import "config"
+
 struct Cell {
     codepoint: i64,
     fg_r: i64,
@@ -18,22 +20,24 @@ const CELL_INVERSE: i64 = 4
 const CELL_SELECTED: i64 = 8
 
 impl Cell {
-    /// Create an empty cell with default colors (white on black).
+    /// Create an empty cell with default colors.
     static fn init() Cell {
+        ensureThemeReady()
         return Cell {
             codepoint: 0,
-            fg_r: 248, fg_g: 248, fg_b: 242,
-            bg_r: 39, bg_g: 40, bg_b: 34,
+            fg_r: THEME_FG_R, fg_g: THEME_FG_G, fg_b: THEME_FG_B,
+            bg_r: THEME_BG_R, bg_g: THEME_BG_G, bg_b: THEME_BG_B,
             flags: 0,
         }
     }
 
     /// Create a cell with the given codepoint and default colors.
     static fn initChar(cp: i64) Cell {
+        ensureThemeReady()
         return Cell {
             codepoint: cp,
-            fg_r: 248, fg_g: 248, fg_b: 242,
-            bg_r: 39, bg_g: 40, bg_b: 34,
+            fg_r: THEME_FG_R, fg_g: THEME_FG_G, fg_b: THEME_FG_B,
+            bg_r: THEME_BG_R, bg_g: THEME_BG_G, bg_b: THEME_BG_B,
             flags: 0,
         }
     }
@@ -63,16 +67,16 @@ test "cell initChar stores codepoint" {
 
 test "cell default fg color" {
     var c = Cell.init()
-    @assertEq(c.fg_r, 248)
-    @assertEq(c.fg_g, 248)
-    @assertEq(c.fg_b, 242)
+    @assertEq(c.fg_r, 217)
+    @assertEq(c.fg_g, 217)
+    @assertEq(c.fg_b, 217)
 }
 
 test "cell default bg color" {
     var c = Cell.init()
-    @assertEq(c.bg_r, 39)
-    @assertEq(c.bg_g, 40)
-    @assertEq(c.bg_b, 34)
+    @assertEq(c.bg_r, 12)
+    @assertEq(c.bg_g, 12)
+    @assertEq(c.bg_b, 12)
 }
 
 test "cell space is blank" {

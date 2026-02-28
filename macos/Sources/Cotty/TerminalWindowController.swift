@@ -19,7 +19,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate {
             defer: false
         )
         window.minSize = NSSize(width: 300, height: 200)
-        window.backgroundColor = Theme.background
+        window.backgroundColor = Theme.shared.background
         window.isReleasedWhenClosed = false
         window.tabbingMode = .preferred
         window.title = "Terminal"

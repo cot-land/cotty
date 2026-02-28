@@ -1,29 +1,77 @@
 /// Configuration system for Cotty.
-/// Maps to Ghostty's config.zig.
+/// Reads ~/.config/cotty/config.json (JSON) for theme, font, and layout settings.
+/// All keys are optional — missing keys use Monokai Remastered defaults.
 
-import "std/os"
+import "std/json"
 import "std/fs"
+import "std/os"
 import "std/string"
+import "std/list"
 
-/// Editor configuration with sensible defaults.
+// ============================================================================
+// Global Theme Defaults (Monokai Remastered)
+// Lazy-initialized via ensureThemeReady() since the compiler zero-inits globals.
+// ============================================================================
+
+var THEME_FG_R: i64 = 0
+var THEME_FG_G: i64 = 0
+var THEME_FG_B: i64 = 0
+var THEME_BG_R: i64 = 0
+var THEME_BG_G: i64 = 0
+var THEME_BG_B: i64 = 0
+
+var THEME_PALETTE: List(i64) = undefined
+var THEME_READY: i64 = 0
+
+// ============================================================================
+// Config Struct
+// ============================================================================
+
 struct Config {
-    tab_width: int,
-    show_line_numbers: bool,
-    theme: string,
+    font_name: string,
+    font_size: i64,
+    padding: i64,
+    bg_r: i64,
+    bg_g: i64,
+    bg_b: i64,
+    fg_r: i64,
+    fg_g: i64,
+    fg_b: i64,
+    cursor_r: i64,
+    cursor_g: i64,
+    cursor_b: i64,
+    sel_bg_r: i64,
+    sel_bg_g: i64,
+    sel_bg_b: i64,
+    sel_fg_r: i64,
+    sel_fg_g: i64,
+    sel_fg_b: i64,
+    palette: List(i64),
 }
 
 impl Config {
-    /// Create a Config with default values.
+    /// Create a Config with Monokai Remastered defaults.
     static fn init() Config {
+        var palette: List(i64) = undefined
+        palette.items = 0
+        palette.count = 0
+        palette.capacity = 0
+        appendPaletteDefaults(palette)
+
         return Config {
-            tab_width: 4,
-            show_line_numbers: true,
-            theme: "default",
+            font_name: "JetBrains Mono",
+            font_size: 18,
+            padding: 8,
+            bg_r: 12, bg_g: 12, bg_b: 12,
+            fg_r: 217, fg_g: 217, fg_b: 217,
+            cursor_r: 252, cursor_g: 151, cursor_b: 31,
+            sel_bg_r: 52, sel_bg_g: 52, sel_bg_b: 52,
+            sel_fg_r: 255, sel_fg_g: 255, sel_fg_b: 255,
+            palette: palette,
         }
     }
 
-    /// Load configuration from a file. Falls back to defaults for missing keys.
-    /// Config format: key = value, one per line. Lines starting with # are comments.
+    /// Load configuration from a JSON file. Falls back to defaults for missing keys.
     static fn loadFromFile(path: string) Config {
         var cfg = Config.init()
 
@@ -31,93 +79,249 @@ impl Config {
             return cfg
         }
 
-        var i = 0
-        const len = @lenOf(content)
-        while (i < len) {
-            // Find end of line
-            var line_end = i
-            while (line_end < len) {
-                if (charAt(content, line_end) == '\n') { break }
-                line_end += 1
-            }
-
-            const line = substring(content, i, line_end)
-            cfg.parseLine(line)
-
-            i = line_end + 1
+        const root = parse(content)
+        if (root == 0) { return cfg }
+        if (jsonTag(root) != JSON_OBJECT) {
+            jsonFree(root)
+            return cfg
         }
 
+        // Font settings
+        const font_val = jsonObjectGet(root, "font-family")
+        if (font_val != 0 and jsonTag(font_val) == JSON_STRING) {
+            cfg.font_name = jsonGetString(font_val)
+        }
+        const size_val = jsonObjectGet(root, "font-size")
+        if (size_val != 0 and jsonTag(size_val) == JSON_INT) {
+            cfg.font_size = jsonGetInt(size_val)
+        }
+        const pad_val = jsonObjectGet(root, "padding")
+        if (pad_val != 0 and jsonTag(pad_val) == JSON_INT) {
+            cfg.padding = jsonGetInt(pad_val)
+        }
+
+        // Colors
+        const bg_val = jsonObjectGet(root, "background")
+        if (bg_val != 0 and jsonTag(bg_val) == JSON_STRING) {
+            const r, g, b = parseHexColor(jsonGetString(bg_val))
+            cfg.bg_r = r
+            cfg.bg_g = g
+            cfg.bg_b = b
+        }
+
+        const fg_val = jsonObjectGet(root, "foreground")
+        if (fg_val != 0 and jsonTag(fg_val) == JSON_STRING) {
+            const r, g, b = parseHexColor(jsonGetString(fg_val))
+            cfg.fg_r = r
+            cfg.fg_g = g
+            cfg.fg_b = b
+        }
+
+        const cursor_val = jsonObjectGet(root, "cursor-color")
+        if (cursor_val != 0 and jsonTag(cursor_val) == JSON_STRING) {
+            const r, g, b = parseHexColor(jsonGetString(cursor_val))
+            cfg.cursor_r = r
+            cfg.cursor_g = g
+            cfg.cursor_b = b
+        }
+
+        const sel_bg_val = jsonObjectGet(root, "selection-background")
+        if (sel_bg_val != 0 and jsonTag(sel_bg_val) == JSON_STRING) {
+            const r, g, b = parseHexColor(jsonGetString(sel_bg_val))
+            cfg.sel_bg_r = r
+            cfg.sel_bg_g = g
+            cfg.sel_bg_b = b
+        }
+
+        const sel_fg_val = jsonObjectGet(root, "selection-foreground")
+        if (sel_fg_val != 0 and jsonTag(sel_fg_val) == JSON_STRING) {
+            const r, g, b = parseHexColor(jsonGetString(sel_fg_val))
+            cfg.sel_fg_r = r
+            cfg.sel_fg_g = g
+            cfg.sel_fg_b = b
+        }
+
+        // Palette (array of 16 hex color strings)
+        const pal_val = jsonObjectGet(root, "palette")
+        if (pal_val != 0 and jsonTag(pal_val) == JSON_ARRAY) {
+            const pal_len = jsonArrayLen(pal_val)
+            if (pal_len == 16) {
+                cfg.palette.count = 0
+                var i: i64 = 0
+                while (i < 16) {
+                    const entry = jsonArrayGet(pal_val, i)
+                    if (jsonTag(entry) == JSON_STRING) {
+                        const r, g, b = parseHexColor(jsonGetString(entry))
+                        cfg.palette.append(r)
+                        cfg.palette.append(g)
+                        cfg.palette.append(b)
+                    } else {
+                        cfg.palette.append(0)
+                        cfg.palette.append(0)
+                        cfg.palette.append(0)
+                    }
+                    i += 1
+                }
+            }
+        }
+
+        jsonFree(root)
         return cfg
     }
+}
 
-    /// Parse a single config line: "key = value"
-    fn parseLine(line: string) void {
-        const len = @lenOf(line)
-        if (len == 0) { return }
-        if (charAt(line, 0) == '#') { return }
+// ============================================================================
+// Hex Color Parsing
+// ============================================================================
 
-        // Find '='
-        var eq_pos = 0
-        var found = false
-        while (eq_pos < len) {
-            if (charAt(line, eq_pos) == '=') {
-                found = true
-                break
+/// Parse a "#RRGGBB" hex color string into (r, g, b) components.
+fn parseHexColor(s: string) (i64, i64, i64) {
+    if (@lenOf(s) != 7) { return (0, 0, 0) }
+    if (charAt(s, 0) != '#') { return (0, 0, 0) }
+    const r = hexDigit(charAt(s, 1)) * 16 + hexDigit(charAt(s, 2))
+    const g = hexDigit(charAt(s, 3)) * 16 + hexDigit(charAt(s, 4))
+    const b = hexDigit(charAt(s, 5)) * 16 + hexDigit(charAt(s, 6))
+    return (r, g, b)
+}
+
+// ============================================================================
+// Environment Helpers
+// ============================================================================
+
+/// Find an environment variable by key name. Returns "" if not found.
+fn findEnvValue(key: string) string {
+    const count = environCount()
+    var i: i64 = 0
+    const key_len = @lenOf(key)
+    while (i < count) {
+        const e = env(i)
+        if (@lenOf(e) > key_len) {
+            if (substring(e, 0, key_len) == key and charAt(e, key_len) == '=') {
+                return substring(e, key_len + 1, @lenOf(e))
             }
-            eq_pos += 1
-        }
-        if (!found) { return }
-
-        const key = trimWhitespace(substring(line, 0, eq_pos))
-        const value = trimWhitespace(substring(line, eq_pos + 1, len))
-
-        if (key == "tab_width") {
-            self.tab_width = parseIntValue(value)
-        } else if (key == "show_line_numbers") {
-            self.show_line_numbers = value == "true"
-        } else if (key == "theme") {
-            self.theme = value
-        }
-    }
-}
-
-/// Trim leading and trailing whitespace from a string.
-fn trimWhitespace(s: string) string {
-    const len = @lenOf(s)
-    if (len == 0) { return s }
-
-    var start = 0
-    while (start < len) {
-        const c = charAt(s, start)
-        if (c != ' ' and c != '\t') { break }
-        start += 1
-    }
-
-    var end = len
-    while (end > start) {
-        const c = charAt(s, end - 1)
-        if (c != ' ' and c != '\t') { break }
-        end -= 1
-    }
-
-    return substring(s, start, end)
-}
-
-/// Parse an integer from a string. Returns 0 on failure.
-fn parseIntValue(s: string) int {
-    var result = 0
-    var i = 0
-    const len = @lenOf(s)
-    while (i < len) {
-        const c = charAt(s, i)
-        if (c >= '0' and c <= '9') {
-            result = result * 10 + (c - '0')
-        } else {
-            break
         }
         i += 1
     }
-    return result
+    return ""
+}
+
+/// Build the default config file path: ~/.config/cotty/config.json
+fn configPath() string {
+    const home = findEnvValue("HOME")
+    if (@lenOf(home) == 0) { return "" }
+    var sb: StringBuilder = undefined
+    sb.buf = 0
+    sb.len = 0
+    sb.cap = 0
+    sb.append(home)
+    sb.append("/.config/cotty/config.json")
+    return sb.toString()
+}
+
+// ============================================================================
+// Palette Defaults
+// ============================================================================
+
+/// Append the 16-color Monokai Remastered palette as 48 RGB values to a list.
+fn appendPaletteDefaults(list: *List(i64)) void {
+    // Color 0: #1a1a1a
+    list.append(26)
+    list.append(26)
+    list.append(26)
+    // Color 1: #f4005f
+    list.append(244)
+    list.append(0)
+    list.append(95)
+    // Color 2: #98e024
+    list.append(152)
+    list.append(224)
+    list.append(36)
+    // Color 3: #fd971f
+    list.append(253)
+    list.append(151)
+    list.append(31)
+    // Color 4: #9d65ff
+    list.append(157)
+    list.append(101)
+    list.append(255)
+    // Color 5: #f4005f
+    list.append(244)
+    list.append(0)
+    list.append(95)
+    // Color 6: #58d1eb
+    list.append(88)
+    list.append(209)
+    list.append(235)
+    // Color 7: #c4c5b5
+    list.append(196)
+    list.append(197)
+    list.append(181)
+    // Color 8: #625e4c
+    list.append(98)
+    list.append(94)
+    list.append(76)
+    // Color 9: #f4005f
+    list.append(244)
+    list.append(0)
+    list.append(95)
+    // Color 10: #98e024
+    list.append(152)
+    list.append(224)
+    list.append(36)
+    // Color 11: #e0d561
+    list.append(224)
+    list.append(213)
+    list.append(97)
+    // Color 12: #9d65ff
+    list.append(157)
+    list.append(101)
+    list.append(255)
+    // Color 13: #f4005f
+    list.append(244)
+    list.append(0)
+    list.append(95)
+    // Color 14: #58d1eb
+    list.append(88)
+    list.append(209)
+    list.append(235)
+    // Color 15: #f6f6ef
+    list.append(246)
+    list.append(246)
+    list.append(239)
+}
+
+// ============================================================================
+// Theme Initialization
+// ============================================================================
+
+/// Ensure all global theme variables are initialized with Monokai Remastered defaults.
+/// Called lazily from Cell.init() and basicColor() for test compatibility.
+fn ensureThemeReady() void {
+    if (THEME_READY == 1) { return }
+    THEME_FG_R = 217
+    THEME_FG_G = 217
+    THEME_FG_B = 217
+    THEME_BG_R = 12
+    THEME_BG_G = 12
+    THEME_BG_B = 12
+    THEME_PALETTE.items = 0
+    THEME_PALETTE.count = 0
+    THEME_PALETTE.capacity = 0
+    appendPaletteDefaults(THEME_PALETTE)
+    THEME_READY = 1
+}
+
+/// Copy config values into global theme variables.
+/// Called once at startup from cotty_app_new().
+fn initThemeDefaults(cfg: *Config) void {
+    ensureThemeReady()
+    THEME_FG_R = cfg.fg_r
+    THEME_FG_G = cfg.fg_g
+    THEME_FG_B = cfg.fg_b
+    THEME_BG_R = cfg.bg_r
+    THEME_BG_G = cfg.bg_g
+    THEME_BG_B = cfg.bg_b
+    THEME_PALETTE = cfg.palette
 }
 
 // ============================================================================
@@ -126,51 +330,80 @@ fn parseIntValue(s: string) int {
 
 test "config defaults" {
     var cfg = Config.init()
-    @assertEq(cfg.tab_width, 4)
-    @assertEq(cfg.show_line_numbers, true)
-    @assertEq(cfg.theme, "default")
+    @assertEq(cfg.font_size, 18)
+    @assertEq(cfg.padding, 8)
+    @assertEq(cfg.bg_r, 12)
+    @assertEq(cfg.bg_g, 12)
+    @assertEq(cfg.bg_b, 12)
+    @assertEq(cfg.fg_r, 217)
+    @assertEq(cfg.fg_g, 217)
+    @assertEq(cfg.fg_b, 217)
+    @assertEq(cfg.cursor_r, 252)
+    @assertEq(cfg.cursor_g, 151)
+    @assertEq(cfg.cursor_b, 31)
+    @assertEq(cfg.font_name, "JetBrains Mono")
 }
 
-test "trim whitespace" {
-    @assertEq(trimWhitespace("  hello  "), "hello")
-    @assertEq(trimWhitespace("hello"), "hello")
-    @assertEq(trimWhitespace(""), "")
-    @assertEq(trimWhitespace("  "), "")
-}
-
-test "parse int" {
-    @assertEq(parseIntValue("42"), 42)
-    @assertEq(parseIntValue("0"), 0)
-    @assertEq(parseIntValue("123"), 123)
-    @assertEq(parseIntValue(""), 0)
-}
-
-test "config parse line tab_width" {
+test "config default palette" {
     var cfg = Config.init()
-    cfg.parseLine("tab_width = 8")
-    @assertEq(cfg.tab_width, 8)
+    @assertEq(cfg.palette.count, 48)
+    // Color 0: #1a1a1a
+    @assertEq(cfg.palette.get(0), 26)
+    @assertEq(cfg.palette.get(1), 26)
+    @assertEq(cfg.palette.get(2), 26)
+    // Color 1: #f4005f
+    @assertEq(cfg.palette.get(3), 244)
+    @assertEq(cfg.palette.get(4), 0)
+    @assertEq(cfg.palette.get(5), 95)
 }
 
-test "config parse line theme" {
-    var cfg = Config.init()
-    cfg.parseLine("theme = monokai")
-    @assertEq(cfg.theme, "monokai")
+test "parseHexColor valid" {
+    const r, g, b = parseHexColor("#ff8000")
+    @assertEq(r, 255)
+    @assertEq(g, 128)
+    @assertEq(b, 0)
 }
 
-test "config parse line show_line_numbers" {
-    var cfg = Config.init()
-    cfg.parseLine("show_line_numbers = false")
-    @assertEq(cfg.show_line_numbers, false)
+test "parseHexColor black" {
+    const r, g, b = parseHexColor("#000000")
+    @assertEq(r, 0)
+    @assertEq(g, 0)
+    @assertEq(b, 0)
 }
 
-test "config parse line comment" {
-    var cfg = Config.init()
-    cfg.parseLine("# this is a comment")
-    @assertEq(cfg.tab_width, 4)
+test "parseHexColor white" {
+    const r, g, b = parseHexColor("#ffffff")
+    @assertEq(r, 255)
+    @assertEq(g, 255)
+    @assertEq(b, 255)
 }
 
-test "config parse line empty" {
-    var cfg = Config.init()
-    cfg.parseLine("")
-    @assertEq(cfg.tab_width, 4)
+test "parseHexColor monokai bg" {
+    const r, g, b = parseHexColor("#0c0c0c")
+    @assertEq(r, 12)
+    @assertEq(g, 12)
+    @assertEq(b, 12)
+}
+
+test "parseHexColor invalid length" {
+    const r, g, b = parseHexColor("#fff")
+    @assertEq(r, 0)
+    @assertEq(g, 0)
+    @assertEq(b, 0)
+}
+
+test "config loadFromFile missing file" {
+    var cfg = Config.loadFromFile("/nonexistent/path/config.json")
+    @assertEq(cfg.font_size, 18)
+    @assertEq(cfg.bg_r, 12)
+}
+
+test "ensureThemeReady lazy init" {
+    THEME_READY = 0
+    ensureThemeReady()
+    @assertEq(THEME_FG_R, 217)
+    @assertEq(THEME_BG_R, 12)
+    @assertEq(THEME_PALETTE.count, 48)
+    @assertEq(THEME_PALETTE.get(0), 26)
+    @assertEq(THEME_PALETTE.get(3), 244)
 }

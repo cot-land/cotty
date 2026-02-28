@@ -59,6 +59,9 @@ int64_t cotty_surface_kind(cotty_surface_t surface);
 cotty_surface_t cotty_terminal_surface_new(cotty_app_t app, int64_t rows, int64_t cols);
 void cotty_terminal_surface_free(cotty_surface_t surface);
 
+// Terminal input
+void cotty_terminal_key(cotty_surface_t surface, int64_t key, int64_t mods);
+
 // Terminal I/O
 void cotty_terminal_write(cotty_surface_t surface, const uint8_t *ptr, int64_t len);
 int64_t cotty_terminal_read(cotty_surface_t surface, uint8_t *ptr, int64_t len);
@@ -92,5 +95,27 @@ void cotty_terminal_selection_clear(cotty_surface_t surface);
 int64_t cotty_terminal_selection_active(cotty_surface_t surface);
 int64_t cotty_terminal_selected_text(cotty_surface_t surface);
 int64_t cotty_terminal_selected_text_len(cotty_surface_t surface);
+
+// Config accessors
+int64_t cotty_config_font_name(void);
+int64_t cotty_config_font_name_len(void);
+int64_t cotty_config_font_size(void);
+int64_t cotty_config_padding(void);
+int64_t cotty_config_bg_r(void);
+int64_t cotty_config_bg_g(void);
+int64_t cotty_config_bg_b(void);
+int64_t cotty_config_fg_r(void);
+int64_t cotty_config_fg_g(void);
+int64_t cotty_config_fg_b(void);
+int64_t cotty_config_cursor_r(void);
+int64_t cotty_config_cursor_g(void);
+int64_t cotty_config_cursor_b(void);
+int64_t cotty_config_sel_bg_r(void);
+int64_t cotty_config_sel_bg_g(void);
+int64_t cotty_config_sel_bg_b(void);
+int64_t cotty_config_sel_fg_r(void);
+int64_t cotty_config_sel_fg_g(void);
+int64_t cotty_config_sel_fg_b(void);
+
 
 #endif

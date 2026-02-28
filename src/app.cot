@@ -203,7 +203,8 @@ test "app close surface message" {
 
 test "app config defaults" {
     var app = App.init()
-    @assertEq(app.config.tab_width, 4)
-    @assertEq(app.config.show_line_numbers, true)
-    @assertEq(app.config.theme, "default")
+    @assertEq(app.config.font_size, 18)
+    @assertEq(app.config.padding, 8)
+    @assertEq(app.config.bg_r, 12)
+    @assertEq(app.config.fg_r, 217)
 }

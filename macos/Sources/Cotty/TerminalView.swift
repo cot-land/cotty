@@ -1,6 +1,5 @@
 import AppKit
 import CCottyCore
-import Foundation  // for Data
 import Metal
 import QuartzCore
 
@@ -84,7 +83,7 @@ class TerminalView: NSView {
 
     private func resizeTerminalGrid(_ size: NSSize) {
         guard renderer != nil else { return }
-        let pad = Theme.paddingPoints
+        let pad = Theme.shared.paddingPoints
         let newCols = max(2, Int((size.width - 2 * pad) / renderer.cellWidthPoints))
         let newRows = max(2, Int((size.height - 2 * pad) / renderer.cellHeightPoints))
         if newRows != surface.terminalRows || newCols != surface.terminalCols {
@@ -96,41 +95,30 @@ class TerminalView: NSView {
 
     private func startPtyMonitor() {
         let fd = surface.ptyFd
-        fputs("[TerminalView] ptyFd=\(fd) rows=\(surface.terminalRows) cols=\(surface.terminalCols)\n", stderr)
-        guard fd >= 0 else {
-            fputs("[TerminalView] ERROR: ptyFd < 0, Pty.spawn() failed\n", stderr)
-            return
-        }
-        // Ensure non-blocking (Cot's set_nonblocking may not work in dylib mode)
+        guard fd >= 0 else { return }
+        // Compiler workaround: Cot's set_nonblocking may not work in dylib mode,
+        // so we ensure O_NONBLOCK from Swift. The DispatchSource I/O monitoring
+        // itself is platform-specific and correctly lives here.
         let flags = fcntl(fd, F_GETFL)
         fcntl(fd, F_SETFL, flags | O_NONBLOCK)
-        fputs("[TerminalView] set nonblocking: flags=\(flags) -> \(flags | O_NONBLOCK)\n", stderr)
         let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: .main)
         source.setEventHandler { [weak self] in
-            fputs("[TerminalView] dispatch source fired\n", stderr)
             self?.readPty()
         }
         source.setCancelHandler { /* fd closed in deinit */ }
         source.resume()
         readSource = source
-        fputs("[TerminalView] dispatch source resumed on fd=\(fd)\n", stderr)
     }
 
     private func readPty() {
-        fputs("[readPty] ENTER fd=\(surface.ptyFd) handle=\(surface.handle)\n", stderr)
         let fd = surface.ptyFd
-        var totalBytes = 0
         while true {
             let n = Darwin.read(fd, readBuffer, 4096)
-            fputs("[readPty] read returned \(n)\n", stderr)
             if n <= 0 { break }
-            totalBytes += n
             for i in 0..<n {
                 cotty_terminal_feed_byte(surface.handle, Int64(readBuffer[i]))
             }
-            fputs("[readPty] fed \(n) bytes OK\n", stderr)
         }
-        fputs("[readPty] total=\(totalBytes) cursor=(\(surface.terminalCursorRow),\(surface.terminalCursorCol))\n", stderr)
         renderFrame()
     }
 
@@ -149,7 +137,7 @@ class TerminalView: NSView {
 
     private func gridPosition(from event: NSEvent) -> (row: Int, col: Int) {
         let point = convert(event.locationInWindow, from: nil)
-        let pad = Theme.paddingPoints
+        let pad = Theme.shared.paddingPoints
         let col = Int((point.x - pad) / renderer.cellWidthPoints)
         let row = Int((point.y - pad) / renderer.cellHeightPoints)
         let clampedRow = max(0, min(row, surface.terminalRows - 1))
@@ -195,59 +183,17 @@ class TerminalView: NSView {
             renderFrame()
         }
 
-        let data = translateKeyToBytes(event)
-        guard !data.isEmpty else { return }
-        let fd = surface.ptyFd
-        data.withUnsafeBytes { buf in
-            guard let ptr = buf.baseAddress else { return }
-            _ = Darwin.write(fd, ptr, data.count)
-        }
+        let (key, mods) = CottySurface.translateKeyEvent(event)
+        guard key != 0 else { return }
+        surface.terminalKey(key, mods: mods)
         resetCursorBlink()
-    }
-
-    /// Translate a key event to the bytes the terminal expects.
-    private func translateKeyToBytes(_ event: NSEvent) -> Data {
-        let ctrl = event.modifierFlags.contains(.control)
-
-        // Special keys → escape sequences
-        switch event.keyCode {
-        case 36:  return Data([0x0D])           // Return
-        case 48:  return Data([0x09])           // Tab
-        case 51:  return Data([0x7F])           // Backspace → DEL
-        case 117: return Data([0x1B, 0x5B, 0x33, 0x7E]) // Delete → ESC[3~
-        case 126: return Data([0x1B, 0x5B, 0x41]) // Up → ESC[A
-        case 125: return Data([0x1B, 0x5B, 0x42]) // Down → ESC[B
-        case 124: return Data([0x1B, 0x5B, 0x43]) // Right → ESC[C
-        case 123: return Data([0x1B, 0x5B, 0x44]) // Left → ESC[D
-        case 115: return Data([0x1B, 0x5B, 0x48]) // Home → ESC[H
-        case 119: return Data([0x1B, 0x5B, 0x46]) // End → ESC[F
-        case 116: return Data([0x1B, 0x5B, 0x35, 0x7E]) // PageUp → ESC[5~
-        case 121: return Data([0x1B, 0x5B, 0x36, 0x7E]) // PageDown → ESC[6~
-        case 53:  return Data([0x1B])           // Escape
-        default: break
-        }
-
-        // Ctrl+key → control character (0x01-0x1A)
-        if ctrl, let ch = event.charactersIgnoringModifiers?.lowercased().first {
-            let val = ch.asciiValue ?? 0
-            if val >= 0x61 && val <= 0x7A { // a-z
-                return Data([val - 0x60])
-            }
-        }
-
-        // Printable characters → UTF-8 bytes
-        if let chars = event.characters, !chars.isEmpty {
-            return Data(chars.utf8)
-        }
-
-        return Data()
     }
 
     // MARK: - Cursor Blink
 
     private func startBlinkTimer() {
         blinkTimer?.invalidate()
-        blinkTimer = Timer.scheduledTimer(withTimeInterval: Theme.blinkInterval, repeats: true) { [weak self] _ in
+        blinkTimer = Timer.scheduledTimer(withTimeInterval: Theme.shared.blinkInterval, repeats: true) { [weak self] _ in
             guard let self else { return }
             self.cursorVisible.toggle()
             self.renderFrame()

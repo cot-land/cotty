@@ -29,7 +29,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, FileTreeDele
             defer: false
         )
         window.minSize = NSSize(width: 400, height: 300)
-        window.backgroundColor = Theme.background
+        window.backgroundColor = Theme.shared.background
         window.isReleasedWhenClosed = false
         window.tabbingMode = .preferred
 

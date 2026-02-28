@@ -10,27 +10,34 @@ struct GlyphInfo {
     var height: UInt16 = 0
 }
 
-/// Rasterizes ASCII glyphs into a Metal texture atlas.
+/// Rasterizes glyphs into a Metal texture atlas with on-demand Unicode support.
 /// Copies Ghostty's per-glyph rendering approach (coretext.zig renderGlyph).
 /// Index 0 = solid white cell (cursor/backgrounds).
-/// Index 1-95 = ASCII 32-126.
+/// Index 1-95 = ASCII 32-126 (pre-rendered).
+/// Index 96+ = Unicode glyphs (rendered on demand).
 class GlyphAtlas {
-    let texture: MTLTexture
+    private(set) var texture: MTLTexture
+    let device: MTLDevice
+    let font: CTFont
     let cellWidth: Int
     let cellHeight: Int
-    let atlasWidth: Int
-    let atlasHeight: Int
+    private(set) var atlasWidth: Int
+    private(set) var atlasHeight: Int
     let ascent: CGFloat
     let descent: CGFloat
 
-    private var glyphs: [UInt8: GlyphInfo] = [:]
-    private static let cols = 16
+    private var glyphs: [UInt32: GlyphInfo] = [:]
+    private static let cols = 32
+    private var nextSlot: Int = 96
+    private var totalSlots: Int
 
     var solidInfo: GlyphInfo {
         GlyphInfo(atlasX: 0, atlasY: 0, width: UInt16(cellWidth), height: UInt16(cellHeight))
     }
 
     init(device: MTLDevice, font: CTFont) {
+        self.device = device
+        self.font = font
         ascent = ceil(CTFontGetAscent(font))
         descent = ceil(CTFontGetDescent(font))
         let leading = ceil(CTFontGetLeading(font))
@@ -44,9 +51,10 @@ class GlyphAtlas {
         CTFontGetAdvancesForGlyphs(font, .horizontal, &mGlyph, &mAdv, 1)
         cellWidth = Int(ceil(mAdv.width))
 
-        // Atlas grid: 96 cells (1 solid + 95 ASCII), 16 columns
-        let totalCells = 96
-        let rows = (totalCells + Self.cols - 1) / Self.cols
+        // Atlas grid: 32 columns, enough rows for 1024 glyphs initially
+        let initialSlots = 1024
+        totalSlots = initialSlots
+        let rows = (initialSlots + Self.cols - 1) / Self.cols
         atlasWidth = Self.cols * cellWidth
         atlasHeight = rows * cellHeight
 
@@ -60,57 +68,25 @@ class GlyphAtlas {
             }
         }
 
-        // Render each ASCII glyph into its own context (Ghostty pattern)
+        // Pre-render ASCII glyphs
         for ascii: UInt8 in 32...126 {
             let idx = Int(ascii - 32) + 1
             let col = idx % Self.cols
             let row = idx / Self.cols
 
-            var ch = UniChar(ascii)
-            var g: CGGlyph = 0
-            let found = CTFontGetGlyphsForCharacters(font, &ch, &g, 1)
-            guard found else { continue }
-
-            // Per-glyph RGBA context (let CG manage memory)
-            guard let ctx = CGContext(
-                data: nil,
-                width: cellWidth,
-                height: cellHeight,
-                bitsPerComponent: 8,
-                bytesPerRow: 0,
-                space: CGColorSpaceCreateDeviceRGB(),
-                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-            ) else { continue }
-
-            // Match Ghostty's rendering settings
-            ctx.setAllowsAntialiasing(true)
-            ctx.setShouldAntialias(true)
-            ctx.setAllowsFontSmoothing(true)
-            ctx.setShouldSmoothFonts(false)
-            ctx.setAllowsFontSubpixelPositioning(true)
-            ctx.setShouldSubpixelPositionFonts(true)
-
-            // Draw white glyph on transparent black
-            ctx.setFillColor(red: 1, green: 1, blue: 1, alpha: 1)
-            // CGContext is bottom-left origin; baseline at y=descent
-            var pos = CGPoint(x: 0, y: descent)
-            CTFontDrawGlyphs(font, &g, &pos, 1, ctx)
-
-            // Copy R channel to atlas, flipping Y (CG bottom-up → atlas top-down)
-            guard let data = ctx.data else { continue }
-            let bpr = ctx.bytesPerRow
-            let ptr = data.bindMemory(to: UInt8.self, capacity: cellHeight * bpr)
+            guard let bitmap = Self.renderGlyphBitmap(font: font, codepoint: UInt32(ascii),
+                                                       cellWidth: cellWidth, cellHeight: cellHeight,
+                                                       descent: descent) else { continue }
 
             let dstCol = col * cellWidth
             let dstRow = row * cellHeight
             for y in 0..<cellHeight {
                 for x in 0..<cellWidth {
-                    let pixel = ptr[y * bpr + x * 4] // R channel, no Y flip (CG nil-data is top-down)
-                    atlasData[(dstRow + y) * atlasWidth + dstCol + x] = pixel
+                    atlasData[(dstRow + y) * atlasWidth + dstCol + x] = bitmap[y * cellWidth + x]
                 }
             }
 
-            glyphs[ascii] = GlyphInfo(
+            glyphs[UInt32(ascii)] = GlyphInfo(
                 atlasX: UInt16(dstCol),
                 atlasY: UInt16(dstRow),
                 width: UInt16(cellWidth),
@@ -138,37 +114,100 @@ class GlyphAtlas {
                 bytesPerRow: atlasWidth
             )
         }
-
-        // Debug: save atlas as PNG
-        Self.saveAtlasDebug(atlasData, width: atlasWidth, height: atlasHeight)
     }
 
-    func lookup(_ ascii: UInt8) -> GlyphInfo {
-        glyphs[ascii] ?? solidInfo
+    func lookup(_ codepoint: UInt32) -> GlyphInfo {
+        if let info = glyphs[codepoint] { return info }
+        if codepoint < 32 { return solidInfo }
+        return renderAndCache(codepoint)
     }
 
-    private static func saveAtlasDebug(_ data: [UInt8], width: Int, height: Int) {
-        guard let rep = NSBitmapImageRep(
-            bitmapDataPlanes: nil,
-            pixelsWide: width,
-            pixelsHigh: height,
-            bitsPerSample: 8,
-            samplesPerPixel: 1,
-            hasAlpha: false,
-            isPlanar: false,
-            colorSpaceName: .deviceWhite,
-            bytesPerRow: width,
-            bitsPerPixel: 8
-        ) else { return }
-
-        guard let bitmapData = rep.bitmapData else { return }
-        data.withUnsafeBytes { src in
-            memcpy(bitmapData, src.baseAddress!, width * height)
+    private func renderAndCache(_ codepoint: UInt32) -> GlyphInfo {
+        guard nextSlot < totalSlots else { return solidInfo }
+        guard let bitmap = Self.renderGlyphBitmap(font: font, codepoint: codepoint,
+                                                   cellWidth: cellWidth, cellHeight: cellHeight,
+                                                   descent: descent) else {
+            // Cache miss glyph as solid to avoid re-rendering
+            glyphs[codepoint] = solidInfo
+            return solidInfo
         }
 
-        if let png = rep.representation(using: .png, properties: [:]) {
-            try? png.write(to: URL(fileURLWithPath: "/tmp/cotty_atlas.png"))
-            print("Atlas saved to /tmp/cotty_atlas.png (\(width)x\(height))")
+        let col = nextSlot % Self.cols
+        let row = nextSlot / Self.cols
+        let dstX = col * cellWidth
+        let dstY = row * cellHeight
+        nextSlot += 1
+
+        // Upload to texture
+        bitmap.withUnsafeBytes { ptr in
+            texture.replace(
+                region: MTLRegion(
+                    origin: MTLOrigin(x: dstX, y: dstY, z: 0),
+                    size: MTLSize(width: cellWidth, height: cellHeight, depth: 1)
+                ),
+                mipmapLevel: 0,
+                withBytes: ptr.baseAddress!,
+                bytesPerRow: cellWidth
+            )
         }
+
+        let info = GlyphInfo(
+            atlasX: UInt16(dstX),
+            atlasY: UInt16(dstY),
+            width: UInt16(cellWidth),
+            height: UInt16(cellHeight)
+        )
+        glyphs[codepoint] = info
+        return info
+    }
+
+    /// Render a single glyph into a cellWidth x cellHeight R8 bitmap.
+    private static func renderGlyphBitmap(font: CTFont, codepoint: UInt32,
+                                           cellWidth: Int, cellHeight: Int,
+                                           descent: CGFloat) -> [UInt8]? {
+        // Convert codepoint to UTF-16
+        var chars: [UniChar]
+        if codepoint <= 0xFFFF {
+            chars = [UniChar(codepoint)]
+        } else {
+            let u = codepoint - 0x10000
+            chars = [UniChar(0xD800 + (u >> 10)), UniChar(0xDC00 + (u & 0x3FF))]
+        }
+
+        var glyphBuf = [CGGlyph](repeating: 0, count: chars.count)
+        guard CTFontGetGlyphsForCharacters(font, &chars, &glyphBuf, chars.count) else { return nil }
+
+        guard let ctx = CGContext(
+            data: nil,
+            width: cellWidth,
+            height: cellHeight,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+
+        ctx.setAllowsAntialiasing(true)
+        ctx.setShouldAntialias(true)
+        ctx.setAllowsFontSmoothing(true)
+        ctx.setShouldSmoothFonts(false)
+        ctx.setAllowsFontSubpixelPositioning(true)
+        ctx.setShouldSubpixelPositionFonts(true)
+
+        ctx.setFillColor(red: 1, green: 1, blue: 1, alpha: 1)
+        var pos = CGPoint(x: 0, y: descent)
+        CTFontDrawGlyphs(font, &glyphBuf, &pos, 1, ctx)
+
+        guard let data = ctx.data else { return nil }
+        let bpr = ctx.bytesPerRow
+        let ptr = data.bindMemory(to: UInt8.self, capacity: cellHeight * bpr)
+
+        var bitmap = [UInt8](repeating: 0, count: cellWidth * cellHeight)
+        for y in 0..<cellHeight {
+            for x in 0..<cellWidth {
+                bitmap[y * cellWidth + x] = ptr[y * bpr + x * 4]
+            }
+        }
+        return bitmap
     }
 }
