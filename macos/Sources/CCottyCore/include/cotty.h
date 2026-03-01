@@ -66,6 +66,8 @@ int64_t cotty_terminal_notify_fd(cotty_surface_t surface);
 
 // Terminal input
 void cotty_terminal_key(cotty_surface_t surface, int64_t key, int64_t mods);
+void cotty_terminal_key_event(cotty_surface_t surface, int64_t key, int64_t mods, int64_t event_type);
+int64_t cotty_terminal_kitty_keyboard(cotty_surface_t surface);
 
 // Terminal I/O
 void cotty_terminal_write(cotty_surface_t surface, const uint8_t *ptr, int64_t len);
@@ -127,6 +129,11 @@ int64_t cotty_terminal_bell(cotty_surface_t surface);
 // Terminal bracketed paste and focus events
 int64_t cotty_terminal_bracketed_paste_mode(cotty_surface_t surface);
 int64_t cotty_terminal_focus_event_mode(cotty_surface_t surface);
+int64_t cotty_terminal_reverse_video(cotty_surface_t surface);
+int64_t cotty_terminal_cursor_blinking(cotty_surface_t surface);
+int64_t cotty_terminal_app_keypad(cotty_surface_t surface);
+void cotty_terminal_focus(cotty_surface_t surface, int64_t focused);
+void cotty_terminal_paste(cotty_surface_t surface, int64_t ptr, int64_t len);
 
 // Per-Surface Inspector
 void cotty_inspector_toggle(cotty_surface_t surface);

@@ -223,6 +223,14 @@ final class CottySurface {
         cotty_terminal_key(handle, key, mods)
     }
 
+    func terminalKeyEvent(_ key: Int64, mods: Int64, eventType: Int64) {
+        cotty_terminal_key_event(handle, key, mods, eventType)
+    }
+
+    var kittyKeyboardFlags: Int64 {
+        cotty_terminal_kitty_keyboard(handle)
+    }
+
     // MARK: - Key Translation (macOS keyCode → Cot KEY_* constants)
 
     /// Translate a macOS NSEvent into abstract (key, mods) for Cot.

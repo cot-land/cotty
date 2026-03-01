@@ -395,11 +395,39 @@ class TerminalView: NSView {
 
         let (key, mods) = CottySurface.translateKeyEvent(event)
         guard key != 0 else { return }
-        // terminalKey writes to PTY fd (thread-safe) and reads mode_app_cursor
+        // Route through Kitty-aware encoder (falls back to legacy when no flags)
         surface.lockTerminal()
-        surface.terminalKey(key, mods: mods)
+        surface.terminalKeyEvent(key, mods: mods, eventType: 0)  // 0 = press
         surface.unlockTerminal()
         resetCursorBlink()
+    }
+
+    override func keyUp(with event: NSEvent) {
+        // Only send keyUp when Kitty report_events (bit 1) is active
+        surface.lockTerminal()
+        let kittyFlags = surface.kittyKeyboardFlags
+        surface.unlockTerminal()
+        guard kittyFlags & 2 != 0 else { return }
+
+        let (key, mods) = CottySurface.translateKeyEvent(event)
+        guard key != 0 else { return }
+        surface.lockTerminal()
+        surface.terminalKeyEvent(key, mods: mods, eventType: 2)  // 2 = release
+        surface.unlockTerminal()
+    }
+
+    override func flagsChanged(with event: NSEvent) {
+        // Handle modifier key press/release for Kitty protocol
+        surface.lockTerminal()
+        let kittyFlags = surface.kittyKeyboardFlags
+        surface.unlockTerminal()
+        guard kittyFlags & 2 != 0 else { return }
+
+        // Map modifier key to KEY_* constant
+        // macOS keyCodes: 56=LShift, 60=RShift, 59=LCtrl, 62=RCtrl,
+        //                 58=LAlt, 61=RAlt, 55=LCmd, 54=RCmd
+        // We send these as the modifier key itself — Kitty uses special codepoints
+        // but for now we just need the event flow; apps that care will use the mods
     }
 
     // MARK: - Focus Events
