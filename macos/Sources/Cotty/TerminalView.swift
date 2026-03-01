@@ -13,7 +13,7 @@ import QuartzCore
 /// Uses standard macOS coordinates (y=0 at bottom) — no isFlipped, matching Ghostty.
 class TerminalView: NSView {
     let surface: CottySurface
-    weak var windowController: TerminalWindowController?
+    weak var workspaceController: WorkspaceWindowController?
 
     // Metal
     private static let metalDevice = MTLCreateSystemDefaultDevice()!
@@ -185,20 +185,23 @@ class TerminalView: NSView {
             NSApp.requestUserAttention(.informationalRequest)
         }
 
-        // Update window title
+        // Update tab title from OSC sequences
         if let title {
-            windowController?.window?.title = title
+            workspaceController?.updateTerminalTitle(title, from: self)
         }
 
-        // Update proxy icon (folder icon in titlebar) from OSC 7 PWD
-        if let pwd, let url = URL(string: pwd) {
-            windowController?.window?.representedURL = url
+        // Update proxy icon + auto-populate sidebar file tree from OSC 7 PWD
+        if let pwd {
+            if let url = URL(string: pwd) {
+                workspaceController?.updateRepresentedURL(url, from: self)
+            }
+            workspaceController?.updateWorkspaceRoot(from: pwd)
         }
 
         updateScrollbar(scrollbackRows: scrollback, visibleRows: rows, viewportRow: viewportRow)
 
         // Notify inspector to re-render
-        windowController?.notifyInspectorRender()
+        workspaceController?.notifyInspectorRender()
     }
 
     // MARK: - Scrollbar

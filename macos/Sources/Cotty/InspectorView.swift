@@ -8,7 +8,7 @@ import QuartzCore
 /// not character cells). Includes a native scrollbar overlay.
 class InspectorView: NSView {
     let surface: CottySurface
-    weak var windowController: TerminalWindowController?
+    weak var workspaceController: WorkspaceWindowController?
     private let renderer: MetalRenderer
     private let metalView: InspectorMetalLayerView
 
@@ -279,8 +279,8 @@ class InspectorView: NSView {
             surface.unlockTerminal()
             renderFrame()
         case 36, 53: // Enter or Escape — return focus to terminal
-            if let wc = windowController {
-                window?.makeFirstResponder(wc.terminalView)
+            if let wc = workspaceController {
+                window?.makeFirstResponder(wc.activeTerminalView)
             }
         default:
             super.keyDown(with: event)

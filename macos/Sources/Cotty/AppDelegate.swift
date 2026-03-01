@@ -1,16 +1,14 @@
 import AppKit
-import CoreText
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     var cottyApp: CottyApp!
-    private var windowControllers: [EditorWindowController] = []
-    private var terminalWindowControllers: [TerminalWindowController] = []
+    private var workspaceControllers: [WorkspaceWindowController] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         cottyApp = CottyApp()
         Theme.shared.load()
         buildMenuBar()
-        newTerminal(self)
+        newWindow(self)
         NSApp.activate(ignoringOtherApps: true)
     }
 
@@ -18,13 +16,42 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         false
     }
 
+    // MARK: - Helpers
+
+    func activeWorkspaceController() -> WorkspaceWindowController? {
+        workspaceControllers.first { $0.window?.isKeyWindow == true }
+            ?? workspaceControllers.last
+    }
+
     // MARK: - Window Management
 
-    @objc func newDocument(_ sender: Any) {
-        let surface = cottyApp.createSurface()
-        let wc = EditorWindowController(surface: surface)
-        windowControllers.append(wc)
-        wc.showWindow(nil)
+    /// Cmd+N — new workspace window with a terminal tab.
+    @objc func newWindow(_ sender: Any) {
+        let ws = CottyWorkspace(app: cottyApp)
+        let wc = WorkspaceWindowController(workspace: ws)
+        wc.addTerminalTab()
+        workspaceControllers.append(wc)
+    }
+
+    /// Cmd+T — new terminal tab in current window.
+    @objc func newTerminal(_ sender: Any) {
+        if let active = activeWorkspaceController() {
+            active.addTerminalTab()
+        } else {
+            newWindow(sender)
+        }
+    }
+
+    /// Cmd+E — new editor tab in current window.
+    @objc func newEditor(_ sender: Any) {
+        if let active = activeWorkspaceController() {
+            active.addEditorTab()
+        } else {
+            let ws = CottyWorkspace(app: cottyApp)
+            let wc = WorkspaceWindowController(workspace: ws)
+            wc.addEditorTab()
+            workspaceControllers.append(wc)
+        }
     }
 
     @objc func openDocument(_ sender: Any) {
@@ -34,47 +61,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         panel.canChooseFiles = true
         panel.begin { [weak self] response in
             guard let self, response == .OK, let url = panel.url else { return }
-            let surface = self.cottyApp.createSurface()
-            let wc = EditorWindowController(surface: surface, fileURL: url)
-            self.windowControllers.append(wc)
-            wc.showWindow(nil)
+            if let active = self.activeWorkspaceController() {
+                active.addEditorTab(fileURL: url)
+            } else {
+                let ws = CottyWorkspace(app: self.cottyApp)
+                let wc = WorkspaceWindowController(workspace: ws)
+                wc.addEditorTab(fileURL: url)
+                self.workspaceControllers.append(wc)
+            }
         }
     }
 
-    func trackWindowController(_ controller: EditorWindowController) {
-        windowControllers.append(controller)
-    }
-
-    func windowControllerDidClose(_ controller: EditorWindowController) {
-        windowControllers.removeAll { $0 === controller }
-    }
-
-    @objc func newTerminal(_ sender: Any) {
-        // Compute grid size from window content rect so the shell spawns at
-        // the correct size (avoids a SIGWINCH race that shows zsh's '%' marker).
-        let contentSize = NSSize(width: 800, height: 500)
-        let scale = NSScreen.main?.backingScaleFactor ?? 2.0
-        let font = CTFontCreateWithName(Theme.shared.fontName as CFString, Theme.shared.fontSize * scale, nil)
-        let cellH = (ceil(CTFontGetAscent(font)) + ceil(CTFontGetDescent(font))
-                      + ceil(CTFontGetLeading(font))) / scale
-        var glyph: CGGlyph = 0
-        var adv = CGSize.zero
-        var ch: UniChar = 0x4D // 'M'
-        CTFontGetGlyphsForCharacters(font, &ch, &glyph, 1)
-        CTFontGetAdvancesForGlyphs(font, .horizontal, &glyph, &adv, 1)
-        let cellW = ceil(adv.width) / scale
-        let pad = Theme.shared.paddingPoints
-        let cols = max(2, Int((contentSize.width - 2 * pad) / cellW))
-        let rows = max(2, Int((contentSize.height - 2 * pad) / cellH))
-
-        let surface = cottyApp.createTerminalSurface(rows: rows, cols: cols)
-        let wc = TerminalWindowController(surface: surface)
-        terminalWindowControllers.append(wc)
-        wc.showWindow(nil)
-    }
-
-    func terminalWindowControllerDidClose(_ controller: TerminalWindowController) {
-        terminalWindowControllers.removeAll { $0 === controller }
+    func workspaceControllerDidClose(_ controller: WorkspaceWindowController) {
+        workspaceControllers.removeAll { $0 === controller }
     }
 
     // MARK: - Menu Bar
@@ -94,25 +93,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // File menu
         let fileMenuItem = NSMenuItem()
         let fileMenu = NSMenu(title: "File")
-        fileMenu.addItem(withTitle: "New Window", action: #selector(newDocument(_:)), keyEquivalent: "n")
-        fileMenu.addItem(withTitle: "New Tab", action: #selector(EditorWindowController.newTab(_:)), keyEquivalent: "t")
-        let terminalItem = NSMenuItem(title: "New Terminal", action: #selector(newTerminal(_:)), keyEquivalent: "t")
-        terminalItem.keyEquivalentModifierMask = [.command, .shift]
-        fileMenu.addItem(terminalItem)
+        fileMenu.addItem(withTitle: "New Window", action: #selector(newWindow(_:)), keyEquivalent: "n")
+        fileMenu.addItem(withTitle: "New Terminal", action: #selector(newTerminal(_:)), keyEquivalent: "t")
+        fileMenu.addItem(withTitle: "New Editor", action: #selector(newEditor(_:)), keyEquivalent: "e")
         fileMenu.addItem(.separator())
         fileMenu.addItem(withTitle: "Open...", action: #selector(openDocument(_:)), keyEquivalent: "o")
-        let openFolderItem = NSMenuItem(title: "Open Folder...", action: #selector(EditorWindowController.openFolder(_:)), keyEquivalent: "o")
+        let openFolderItem = NSMenuItem(title: "Open Folder...", action: #selector(WorkspaceWindowController.openFolder(_:)), keyEquivalent: "o")
         openFolderItem.keyEquivalentModifierMask = [.command, .shift]
         fileMenu.addItem(openFolderItem)
         fileMenu.addItem(.separator())
-        fileMenu.addItem(withTitle: "Save", action: #selector(EditorWindowController.saveDocument(_:)), keyEquivalent: "s")
+        fileMenu.addItem(withTitle: "Save", action: #selector(WorkspaceWindowController.saveDocument(_:)), keyEquivalent: "s")
 
-        let saveAsItem = NSMenuItem(title: "Save As...", action: #selector(EditorWindowController.saveDocumentAs(_:)), keyEquivalent: "S")
+        let saveAsItem = NSMenuItem(title: "Save As...", action: #selector(WorkspaceWindowController.saveDocumentAs(_:)), keyEquivalent: "S")
         saveAsItem.keyEquivalentModifierMask = [.command, .shift]
         fileMenu.addItem(saveAsItem)
 
         fileMenu.addItem(.separator())
-        fileMenu.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        fileMenu.addItem(withTitle: "Close Tab", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
         fileMenuItem.submenu = fileMenu
         mainMenu.addItem(fileMenuItem)
 
@@ -132,8 +129,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // View menu
         let viewMenuItem = NSMenuItem()
         let viewMenu = NSMenu(title: "View")
-        viewMenu.addItem(withTitle: "Toggle Sidebar", action: #selector(EditorWindowController.toggleSidebar(_:)), keyEquivalent: "b")
-        let inspectorItem = NSMenuItem(title: "Terminal Inspector", action: #selector(TerminalWindowController.toggleTerminalInspector(_:)), keyEquivalent: "i")
+        viewMenu.addItem(withTitle: "Toggle Sidebar", action: #selector(WorkspaceWindowController.toggleSidebar(_:)), keyEquivalent: "b")
+        let inspectorItem = NSMenuItem(title: "Terminal Inspector", action: #selector(WorkspaceWindowController.toggleTerminalInspector(_:)), keyEquivalent: "i")
         inspectorItem.keyEquivalentModifierMask = [.command, .option]
         viewMenu.addItem(inspectorItem)
         viewMenu.addItem(withTitle: "Toggle Full Screen", action: #selector(NSWindow.toggleFullScreen(_:)), keyEquivalent: "f")

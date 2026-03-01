@@ -14,7 +14,7 @@ class EditorView: NSView {
     private var blinkTimer: Timer?
 
     let surface: CottySurface
-    weak var windowController: EditorWindowController?
+    weak var workspaceController: WorkspaceWindowController?
 
     // Metal
     private static let metalDevice = MTLCreateSystemDefaultDevice()!
@@ -157,12 +157,12 @@ class EditorView: NSView {
         while let action = app.nextAction() {
             switch action.tag {
             case Int64(COTTY_ACTION_MARK_DIRTY):
-                windowController?.markDirty()
+                workspaceController?.markDirty()
             case Int64(COTTY_ACTION_QUIT):
                 NSApp.terminate(nil)
             case Int64(COTTY_ACTION_NEW_WINDOW):
                 if let delegate = NSApp.delegate as? AppDelegate {
-                    delegate.newDocument(self)
+                    delegate.newWindow(self)
                 }
             case Int64(COTTY_ACTION_CLOSE_SURFACE):
                 window?.performClose(nil)

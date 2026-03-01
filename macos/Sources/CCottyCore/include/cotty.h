@@ -181,5 +181,44 @@ int64_t cotty_config_sel_fg_r(void);
 int64_t cotty_config_sel_fg_g(void);
 int64_t cotty_config_sel_fg_b(void);
 
+// Workspace
+typedef int64_t cotty_workspace_t;
+
+// Workspace lifecycle
+cotty_workspace_t cotty_workspace_new(cotty_app_t app);
+void cotty_workspace_free(cotty_workspace_t workspace);
+
+// Workspace tab operations
+int64_t cotty_workspace_add_terminal_tab(cotty_workspace_t ws, int64_t rows, int64_t cols);
+int64_t cotty_workspace_add_editor_tab(cotty_workspace_t ws);
+int64_t cotty_workspace_add_editor_tab_preview(cotty_workspace_t ws);
+void cotty_workspace_select_tab(cotty_workspace_t ws, int64_t index);
+int64_t cotty_workspace_close_tab(cotty_workspace_t ws, int64_t index);
+void cotty_workspace_move_tab(cotty_workspace_t ws, int64_t from, int64_t to);
+void cotty_workspace_pin_tab(cotty_workspace_t ws, int64_t index);
+void cotty_workspace_mark_dirty(cotty_workspace_t ws, int64_t index);
+
+// Workspace tab queries
+int64_t cotty_workspace_tab_count(cotty_workspace_t ws);
+int64_t cotty_workspace_selected_index(cotty_workspace_t ws);
+int64_t cotty_workspace_tab_surface(cotty_workspace_t ws, int64_t index);
+int64_t cotty_workspace_tab_is_terminal(cotty_workspace_t ws, int64_t index);
+int64_t cotty_workspace_tab_is_preview(cotty_workspace_t ws, int64_t index);
+int64_t cotty_workspace_tab_is_dirty(cotty_workspace_t ws, int64_t index);
+int64_t cotty_workspace_tab_inspector_visible(cotty_workspace_t ws, int64_t index);
+void cotty_workspace_tab_set_inspector_visible(cotty_workspace_t ws, int64_t index, int64_t visible);
+int64_t cotty_workspace_tab_title(cotty_workspace_t ws, int64_t index);
+int64_t cotty_workspace_tab_title_len(cotty_workspace_t ws, int64_t index);
+int64_t cotty_workspace_preview_tab_index(cotty_workspace_t ws);
+
+// Workspace state
+int64_t cotty_workspace_sidebar_visible(cotty_workspace_t ws);
+void cotty_workspace_set_sidebar_visible(cotty_workspace_t ws, int64_t visible);
+int64_t cotty_workspace_sidebar_width(cotty_workspace_t ws);
+void cotty_workspace_set_sidebar_width(cotty_workspace_t ws, int64_t width);
+int64_t cotty_workspace_root_url(cotty_workspace_t ws);
+int64_t cotty_workspace_root_url_len(cotty_workspace_t ws);
+void cotty_workspace_set_root_url(cotty_workspace_t ws, const uint8_t *ptr, int64_t len);
+
 
 #endif

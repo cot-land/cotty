@@ -2,6 +2,7 @@ import AppKit
 
 protocol FileTreeDelegate: AnyObject {
     func fileTree(_ tree: FileTreeView, didSelect url: URL)
+    func fileTree(_ tree: FileTreeView, didDoubleClick url: URL)
 }
 
 /// Sidebar file tree using NSOutlineView.
@@ -45,6 +46,7 @@ class FileTreeView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate {
         outlineView.indentationPerLevel = 14
         outlineView.target = self
         outlineView.action = #selector(onRowClick)
+        outlineView.doubleAction = #selector(onRowDoubleClick)
 
         // Style
         outlineView.backgroundColor = .clear
@@ -160,6 +162,14 @@ class FileTreeView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate {
         guard row >= 0, let url = outlineView.item(atRow: row) as? URL else { return }
         if !isDirectory(url) {
             delegate?.fileTree(self, didSelect: url)
+        }
+    }
+
+    @objc private func onRowDoubleClick() {
+        let row = outlineView.clickedRow
+        guard row >= 0, let url = outlineView.item(atRow: row) as? URL else { return }
+        if !isDirectory(url) {
+            delegate?.fileTree(self, didDoubleClick: url)
         }
     }
 }
