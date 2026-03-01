@@ -256,9 +256,9 @@ class MetalRenderer {
         var cells: [CellData] = []
 
         // Read cells directly from the raw buffer to avoid per-cell FFI overhead.
-        // Cell layout: 8 x Int64 (codepoint, fg_r, fg_g, fg_b, bg_r, bg_g, bg_b, flags)
+        // Cell layout: 11 x Int64 (codepoint, fg_r, fg_g, fg_b, bg_r, bg_g, bg_b, flags, ul_r, ul_g, ul_b)
         guard let basePtr = surface.terminalCellsPtr else { return }
-        let cellStride = 64 // 8 fields * 8 bytes each
+        let cellStride = 88 // 11 fields * 8 bytes each
         let solid = atlas.solidInfo
 
         for row in 0..<rows {
@@ -437,7 +437,7 @@ class MetalRenderer {
 
         var cells: [CellData] = []
         let solid = atlas.solidInfo
-        let inspStride = 64  // 8 fields * 8 bytes
+        let inspStride = 88  // 11 fields * 8 bytes
 
         for row in 0..<inspRows {
             for col in 0..<inspCols {

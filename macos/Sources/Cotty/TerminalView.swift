@@ -171,8 +171,9 @@ class TerminalView: NSView {
         // Read bell state
         let bellPending = surface.bellPending
 
-        // Read title
+        // Read title and PWD
         let title = surface.terminalTitle
+        let pwd = surface.terminalPwd
 
         let scrollback = surface.scrollbackRows
         let rows = surface.terminalRows
@@ -187,6 +188,11 @@ class TerminalView: NSView {
         // Update window title
         if let title {
             windowController?.window?.title = title
+        }
+
+        // Update proxy icon (folder icon in titlebar) from OSC 7 PWD
+        if let pwd, let url = URL(string: pwd) {
+            windowController?.window?.representedURL = url
         }
 
         updateScrollbar(scrollbackRows: scrollback, visibleRows: rows, viewportRow: viewportRow)
@@ -285,7 +291,14 @@ class TerminalView: NSView {
             surface.unlockTerminal()
             return
         }
-        surface.selectionStart(row: pos.row, col: pos.col)
+        switch event.clickCount {
+        case 2:
+            surface.selectWord(row: pos.row, col: pos.col)
+        case 3:
+            surface.selectLine(row: pos.row)
+        default:
+            surface.selectionStart(row: pos.row, col: pos.col)
+        }
         surface.unlockTerminal()
         renderFrame()
     }
@@ -378,6 +391,24 @@ class TerminalView: NSView {
                 renderFrame()
                 return
             }
+        }
+
+        // Cmd+Up → jump to previous prompt (OSC 133)
+        if event.modifierFlags.contains(.command) && event.keyCode == 126 {
+            surface.lockTerminal()
+            let _ = surface.jumpToPreviousPrompt()
+            surface.unlockTerminal()
+            renderFrame()
+            return
+        }
+
+        // Cmd+Down → jump to next prompt (OSC 133)
+        if event.modifierFlags.contains(.command) && event.keyCode == 125 {
+            surface.lockTerminal()
+            let _ = surface.jumpToNextPrompt()
+            surface.unlockTerminal()
+            renderFrame()
+            return
         }
 
         // Let Cmd+key combos through to the menu responder chain

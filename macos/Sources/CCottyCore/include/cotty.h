@@ -105,6 +105,8 @@ void cotty_terminal_set_viewport(cotty_surface_t surface, int64_t row);
 void cotty_terminal_selection_start(cotty_surface_t surface, int64_t row, int64_t col);
 void cotty_terminal_selection_update(cotty_surface_t surface, int64_t row, int64_t col);
 void cotty_terminal_selection_clear(cotty_surface_t surface);
+void cotty_terminal_select_word(cotty_surface_t surface, int64_t row, int64_t col);
+void cotty_terminal_select_line(cotty_surface_t surface, int64_t row);
 int64_t cotty_terminal_selection_active(cotty_surface_t surface);
 int64_t cotty_terminal_selected_text(cotty_surface_t surface);
 int64_t cotty_terminal_selected_text_len(cotty_surface_t surface);
@@ -122,6 +124,10 @@ int64_t cotty_terminal_cursor_shape(cotty_surface_t surface);
 // Terminal title
 int64_t cotty_terminal_title(cotty_surface_t surface);
 int64_t cotty_terminal_title_len(cotty_surface_t surface);
+
+// Terminal PWD (OSC 7)
+int64_t cotty_terminal_pwd(cotty_surface_t surface);
+int64_t cotty_terminal_pwd_len(cotty_surface_t surface);
 
 // Terminal bell
 int64_t cotty_terminal_bell(cotty_surface_t surface);
@@ -148,6 +154,11 @@ int64_t cotty_inspector_content_rows(cotty_surface_t surface);
 int64_t cotty_inspector_scroll_offset(cotty_surface_t surface);
 void cotty_inspector_set_scroll(cotty_surface_t surface, int64_t offset);
 void cotty_inspector_rebuild_terminal_state(cotty_surface_t surface);
+
+// Semantic prompts (OSC 133)
+int64_t cotty_terminal_jump_prev_prompt(cotty_surface_t surface);
+int64_t cotty_terminal_jump_next_prompt(cotty_surface_t surface);
+int64_t cotty_terminal_row_semantic(cotty_surface_t surface, int64_t row);
 
 // Config accessors
 int64_t cotty_config_font_name(void);

@@ -145,8 +145,8 @@ final class CottySurface {
     }
 
     /// Raw pointer to the contiguous cell buffer.
-    /// Each cell = 8 x Int64 (codepoint, fg_r, fg_g, fg_b, bg_r, bg_g, bg_b, flags).
-    /// Stride = 64 bytes. Total cells = terminalRows * terminalCols.
+    /// Each cell = 11 x Int64 (codepoint, fg_r, fg_g, fg_b, bg_r, bg_g, bg_b, flags, ul_r, ul_g, ul_b).
+    /// Stride = 88 bytes. Total cells = terminalRows * terminalCols.
     var terminalCellsPtr: UnsafeRawPointer? {
         let ptr = cotty_terminal_cells_ptr(handle)
         guard ptr != 0 else { return nil }
@@ -165,6 +165,14 @@ final class CottySurface {
 
     func selectionClear() {
         cotty_terminal_selection_clear(handle)
+    }
+
+    func selectWord(row: Int, col: Int) {
+        cotty_terminal_select_word(handle, Int64(row), Int64(col))
+    }
+
+    func selectLine(row: Int) {
+        cotty_terminal_select_line(handle, Int64(row))
     }
 
     var selectionActive: Bool {
@@ -189,6 +197,17 @@ final class CottySurface {
     var terminalTitle: String? {
         let ptr = cotty_terminal_title(handle)
         let len = cotty_terminal_title_len(handle)
+        guard ptr != 0, len > 0 else { return nil }
+        let bufPtr = UnsafeRawPointer(bitPattern: Int(ptr))!
+        let data = Data(bytes: bufPtr, count: Int(len))
+        return String(data: data, encoding: .utf8)
+    }
+
+    // MARK: - Terminal PWD (OSC 7)
+
+    var terminalPwd: String? {
+        let ptr = cotty_terminal_pwd(handle)
+        let len = cotty_terminal_pwd_len(handle)
         guard ptr != 0, len > 0 else { return nil }
         let bufPtr = UnsafeRawPointer(bitPattern: Int(ptr))!
         let data = Data(bytes: bufPtr, count: Int(len))
@@ -285,6 +304,20 @@ final class CottySurface {
         }
 
         return (0, 0)
+    }
+
+    // MARK: - Semantic Prompts (OSC 133)
+
+    func jumpToPreviousPrompt() -> Int {
+        Int(cotty_terminal_jump_prev_prompt(handle))
+    }
+
+    func jumpToNextPrompt() -> Int {
+        Int(cotty_terminal_jump_next_prompt(handle))
+    }
+
+    func rowSemantic(_ row: Int) -> Int {
+        Int(cotty_terminal_row_semantic(handle, Int64(row)))
     }
 
     // MARK: - Inspector
