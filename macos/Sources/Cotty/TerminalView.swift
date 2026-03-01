@@ -99,6 +99,16 @@ class TerminalView: NSView {
         renderFrame()
     }
 
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        guard let window else { return }
+        let newScale = window.backingScaleFactor
+        renderer?.updateScaleFactor(newScale)
+        updateDrawableSize()
+        resizeTerminalGrid(bounds.size)
+        renderFrame()
+    }
+
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         resizeTerminalGrid(newSize)

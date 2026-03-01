@@ -10,7 +10,7 @@ class MetalRenderer {
     let commandQueue: MTLCommandQueue
     let pipelineState: MTLRenderPipelineState
     private(set) var atlas: GlyphAtlas
-    let scaleFactor: CGFloat
+    private(set) var scaleFactor: CGFloat
 
     var cellWidthPoints: CGFloat { CGFloat(atlas.cellWidth) / scaleFactor }
     var cellHeightPoints: CGFloat { CGFloat(atlas.cellHeight) / scaleFactor }
@@ -125,6 +125,14 @@ class MetalRenderer {
         let fontSize = Theme.shared.fontSize * scaleFactor
         let font = CTFontCreateWithName(Theme.shared.fontName as CFString, fontSize, nil)
         atlas = GlyphAtlas(device: device, font: font)
+    }
+
+    /// Update the scale factor (e.g. when moving between Retina and non-Retina displays).
+    /// Rebuilds the atlas if the scale actually changed.
+    func updateScaleFactor(_ newScale: CGFloat) {
+        guard newScale != scaleFactor else { return }
+        scaleFactor = newScale
+        rebuildAtlas()
     }
 
     func render(
@@ -263,10 +271,17 @@ class MetalRenderer {
         var cells: [CellData] = []
 
         // Read cells directly from the raw buffer to avoid per-cell FFI overhead.
-        // Cell layout: 11 x Int64 (codepoint, fg_r, fg_g, fg_b, bg_r, bg_g, bg_b, flags, ul_r, ul_g, ul_b)
+        // Cell layout: 8 x Int64 (codepoint, fg_type, fg_val, bg_type, bg_val, flags, ul_type, ul_val)
         guard let basePtr = surface.terminalCellsPtr else { return }
-        let cellStride = 88 // 11 fields * 8 bytes each
+        let palettePtr = surface.terminalPalettePtr
+        let cellStride = 64 // 8 fields * 8 bytes each
         let solid = atlas.solidInfo
+
+        // Default colors from theme for COLOR_NONE resolution
+        let defFgR = Theme.shared.fgR, defFgG = Theme.shared.fgG, defFgB = Theme.shared.fgB
+        let defBgR = UInt8(clamping: Int(Theme.shared.bgR * 255.0))
+        let defBgG = UInt8(clamping: Int(Theme.shared.bgG * 255.0))
+        let defBgB = UInt8(clamping: Int(Theme.shared.bgB * 255.0))
 
         for row in 0..<rows {
             for col in 0..<cols {
@@ -274,39 +289,43 @@ class MetalRenderer {
                 let cellPtr = basePtr + offset
 
                 let codepoint = cellPtr.load(fromByteOffset: 0, as: Int64.self)
-                let fg_r = cellPtr.load(fromByteOffset: 8, as: Int64.self)
-                let fg_g = cellPtr.load(fromByteOffset: 16, as: Int64.self)
-                let fg_b = cellPtr.load(fromByteOffset: 24, as: Int64.self)
-                let bg_r = cellPtr.load(fromByteOffset: 32, as: Int64.self)
-                let bg_g = cellPtr.load(fromByteOffset: 40, as: Int64.self)
-                let bg_b = cellPtr.load(fromByteOffset: 48, as: Int64.self)
+                let fgType = cellPtr.load(fromByteOffset: 8, as: Int64.self)
+                let fgVal = cellPtr.load(fromByteOffset: 16, as: Int64.self)
+                let bgType = cellPtr.load(fromByteOffset: 24, as: Int64.self)
+                let bgVal = cellPtr.load(fromByteOffset: 32, as: Int64.self)
 
-                let flags = cellPtr.load(fromByteOffset: 56, as: Int64.self)
+                let flags = cellPtr.load(fromByteOffset: 40, as: Int64.self)
+                let isInverse = flags & 4 != 0
+                let isBold = flags & 1 != 0
+                let isDim = flags & 16 != 0
 
-                // Apply CELL_INVERSE: swap fg/bg
-                var drawFgR = fg_r, drawFgG = fg_g, drawFgB = fg_b
-                var drawBgR = bg_r, drawBgG = bg_g, drawBgB = bg_b
-                if flags & 4 != 0 {  // CELL_INVERSE
-                    drawFgR = bg_r; drawFgG = bg_g; drawFgB = bg_b
-                    drawBgR = fg_r; drawBgG = fg_g; drawBgB = fg_b
+                // Bold-as-bright: palette indices 0-7 shift to 8-15 when bold
+                var effectiveFgVal = fgVal
+                if isBold && fgType == 1 && fgVal >= 0 && fgVal < 8 {
+                    effectiveFgVal = fgVal + 8
                 }
 
-                // Apply CELL_DIM: halve foreground brightness
-                if flags & 16 != 0 {  // CELL_DIM
-                    drawFgR = drawFgR / 2
-                    drawFgG = drawFgG / 2
-                    drawFgB = drawFgB / 2
+                // Resolve FIRST, then swap for inverse (Ghostty: generic.zig:2827-2873)
+                var (fgR, fgG, fgB) = resolveColor(fgType, effectiveFgVal, palettePtr, defFgR, defFgG, defFgB)
+                var (bgR, bgG, bgB) = resolveColor(bgType, bgVal, palettePtr, defBgR, defBgG, defBgB)
+
+                if isInverse {
+                    let tmp = (fgR, fgG, fgB)
+                    (fgR, fgG, fgB) = (bgR, bgG, bgB)
+                    (bgR, bgG, bgB) = tmp
                 }
 
-                // Background cell (skip black)
-                if drawBgR != 0 || drawBgG != 0 || drawBgB != 0 {
+                // DIM: use alpha instead of RGB halving (Ghostty: faint_opacity)
+                let fgAlpha: UInt8 = isDim ? 0x80 : 0xFF
+
+                // Background cell — render if explicit bg OR inverse (inverse always needs bg)
+                if bgType != 0 || isInverse {
                     cells.append(CellData(
                         gridX: UInt16(col), gridY: UInt16(row),
                         atlasX: solid.atlasX, atlasY: solid.atlasY,
                         glyphW: solid.width, glyphH: solid.height,
                         offX: 0, offY: 0,
-                        r: UInt8(clamping: drawBgR), g: UInt8(clamping: drawBgG),
-                        b: UInt8(clamping: drawBgB), a: 0xFF
+                        r: bgR, g: bgG, b: bgB, a: 0xFF
                     ))
                 }
 
@@ -329,8 +348,7 @@ class MetalRenderer {
                         atlasX: g.atlasX, atlasY: g.atlasY,
                         glyphW: g.width, glyphH: g.height,
                         offX: 0, offY: 0,
-                        r: UInt8(clamping: drawFgR), g: UInt8(clamping: drawFgG),
-                        b: UInt8(clamping: drawFgB), a: 0xFF
+                        r: fgR, g: fgG, b: fgB, a: fgAlpha
                     ))
                 }
             }
@@ -444,7 +462,7 @@ class MetalRenderer {
 
         var cells: [CellData] = []
         let solid = atlas.solidInfo
-        let inspStride = 88  // 11 fields * 8 bytes
+        let inspStride = 64  // 8 fields * 8 bytes
 
         for row in 0..<inspRows {
             for col in 0..<inspCols {
@@ -452,22 +470,23 @@ class MetalRenderer {
                 let cellPtr = inspBase + offset
 
                 let codepoint = cellPtr.load(fromByteOffset: 0, as: Int64.self)
-                let fg_r = cellPtr.load(fromByteOffset: 8, as: Int64.self)
-                let fg_g = cellPtr.load(fromByteOffset: 16, as: Int64.self)
-                let fg_b = cellPtr.load(fromByteOffset: 24, as: Int64.self)
-                let bg_r = cellPtr.load(fromByteOffset: 32, as: Int64.self)
-                let bg_g = cellPtr.load(fromByteOffset: 40, as: Int64.self)
-                let bg_b = cellPtr.load(fromByteOffset: 48, as: Int64.self)
+                let fgType = cellPtr.load(fromByteOffset: 8, as: Int64.self)
+                let fgVal = cellPtr.load(fromByteOffset: 16, as: Int64.self)
+                let bgType = cellPtr.load(fromByteOffset: 24, as: Int64.self)
+                let bgVal = cellPtr.load(fromByteOffset: 32, as: Int64.self)
 
-                // Background
-                if bg_r != 0 || bg_g != 0 || bg_b != 0 {
+                // Inspector always uses COLOR_RGB, resolve directly
+                let (fgR, fgG, fgB) = resolveColor(fgType, fgVal, nil, 200, 200, 200)
+                let (bgR, bgG, bgB) = resolveColor(bgType, bgVal, nil, 0, 0, 0)
+
+                // Background — skip COLOR_NONE
+                if bgType != 0 {
                     cells.append(CellData(
                         gridX: UInt16(col), gridY: UInt16(row),
                         atlasX: solid.atlasX, atlasY: solid.atlasY,
                         glyphW: solid.width, glyphH: solid.height,
                         offX: 0, offY: 0,
-                        r: UInt8(clamping: bg_r), g: UInt8(clamping: bg_g),
-                        b: UInt8(clamping: bg_b), a: 0xFF
+                        r: bgR, g: bgG, b: bgB, a: 0xFF
                     ))
                 }
 
@@ -479,8 +498,7 @@ class MetalRenderer {
                         atlasX: g.atlasX, atlasY: g.atlasY,
                         glyphW: g.width, glyphH: g.height,
                         offX: 0, offY: 0,
-                        r: UInt8(clamping: fg_r), g: UInt8(clamping: fg_g),
-                        b: UInt8(clamping: fg_b), a: 0xFF
+                        r: fgR, g: fgG, b: fgB, a: 0xFF
                     ))
                 }
             }
@@ -534,5 +552,26 @@ class MetalRenderer {
         enc.endEncoding()
         cmdBuf.present(drawable)
         cmdBuf.commit()
+    }
+
+    /// Resolve a semantic color (type + value) to an RGB tuple.
+    /// - type 0 (COLOR_NONE): use the provided default color
+    /// - type 1 (COLOR_PALETTE): look up palette index (val) → RGB from palette pointer
+    /// - type 2 (COLOR_RGB): unpack val as (r << 16 | g << 8 | b)
+    private func resolveColor(
+        _ type: Int64, _ val: Int64,
+        _ palette: UnsafeRawPointer?,
+        _ defR: UInt8, _ defG: UInt8, _ defB: UInt8
+    ) -> (UInt8, UInt8, UInt8) {
+        if type == 0 { return (defR, defG, defB) }  // COLOR_NONE
+        if type == 1, let pal = palette {  // COLOR_PALETTE
+            let base = Int(val) * 3
+            let r = UInt8(clamping: pal.load(fromByteOffset: base * 8, as: Int64.self))
+            let g = UInt8(clamping: pal.load(fromByteOffset: (base + 1) * 8, as: Int64.self))
+            let b = UInt8(clamping: pal.load(fromByteOffset: (base + 2) * 8, as: Int64.self))
+            return (r, g, b)
+        }
+        // COLOR_RGB (type == 2) or palette without pointer — unpack
+        return (UInt8((val >> 16) & 0xFF), UInt8((val >> 8) & 0xFF), UInt8(val & 0xFF))
     }
 }

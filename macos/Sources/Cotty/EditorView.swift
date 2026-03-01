@@ -101,6 +101,15 @@ class EditorView: NSView {
         renderFrame()
     }
 
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        guard let window else { return }
+        renderer?.updateScaleFactor(window.backingScaleFactor)
+        updateDrawableSize()
+        updateContentSize()
+        renderFrame()
+    }
+
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         updateDrawableSize()

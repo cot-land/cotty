@@ -110,6 +110,15 @@ class InspectorView: NSView {
         renderFrame()
     }
 
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        guard let window else { return }
+        renderer.updateScaleFactor(window.backingScaleFactor)
+        updateDrawableSize()
+        resizeInspectorGrid()
+        renderFrame()
+    }
+
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         // Reposition tab bar and content area
