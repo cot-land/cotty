@@ -164,6 +164,9 @@ int64_t cotty_terminal_row_semantic(cotty_surface_t surface, int64_t row);
 int64_t cotty_config_font_name(void);
 int64_t cotty_config_font_name_len(void);
 int64_t cotty_config_font_size(void);
+int64_t cotty_config_ui_font_name(void);
+int64_t cotty_config_ui_font_name_len(void);
+int64_t cotty_config_ui_font_size(void);
 int64_t cotty_config_padding(void);
 int64_t cotty_config_bg_r(void);
 int64_t cotty_config_bg_g(void);
@@ -220,5 +223,22 @@ int64_t cotty_workspace_root_url(cotty_workspace_t ws);
 int64_t cotty_workspace_root_url_len(cotty_workspace_t ws);
 void cotty_workspace_set_root_url(cotty_workspace_t ws, const uint8_t *ptr, int64_t len);
 
+// File tree
+typedef int64_t cotty_filetree_t;
+
+cotty_filetree_t cotty_filetree_new(const uint8_t *root_ptr, int64_t root_len);
+void cotty_filetree_free(cotty_filetree_t tree);
+void cotty_filetree_set_root(cotty_filetree_t tree, const uint8_t *ptr, int64_t len);
+int64_t cotty_filetree_row_count(cotty_filetree_t tree);
+void cotty_filetree_toggle_expand(cotty_filetree_t tree, int64_t row);
+void cotty_filetree_select_row(cotty_filetree_t tree, int64_t row);
+int64_t cotty_filetree_selected_row(cotty_filetree_t tree);
+int64_t cotty_filetree_row_name(cotty_filetree_t tree, int64_t row);
+int64_t cotty_filetree_row_name_len(cotty_filetree_t tree, int64_t row);
+int64_t cotty_filetree_row_depth(cotty_filetree_t tree, int64_t row);
+int64_t cotty_filetree_row_is_dir(cotty_filetree_t tree, int64_t row);
+int64_t cotty_filetree_row_is_expanded(cotty_filetree_t tree, int64_t row);
+int64_t cotty_filetree_row_path(cotty_filetree_t tree, int64_t row);
+int64_t cotty_filetree_row_path_len(cotty_filetree_t tree, int64_t row);
 
 #endif

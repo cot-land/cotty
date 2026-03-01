@@ -8,6 +8,8 @@ class Theme {
     // Font
     var fontName: String = "JetBrains Mono"
     var fontSize: CGFloat = 18
+    var uiFontName: String = ""  // empty = system font
+    var uiFontSize: CGFloat = 13
 
     // Background
     var bgR: Double = 0x0C / 255.0
@@ -51,6 +53,20 @@ class Theme {
         }
 
         fontSize = CGFloat(cotty_config_font_size())
+
+        // UI font name from Cot string pointer + length
+        let uiNamePtr = cotty_config_ui_font_name()
+        let uiNameLen = cotty_config_ui_font_name_len()
+        if uiNamePtr != 0 && uiNameLen > 0 {
+            if let ptr = UnsafeRawPointer(bitPattern: Int(uiNamePtr)) {
+                let data = Data(bytes: ptr, count: Int(uiNameLen))
+                if let name = String(data: data, encoding: .utf8) {
+                    uiFontName = name
+                }
+            }
+        }
+        uiFontSize = CGFloat(cotty_config_ui_font_size())
+
         paddingPoints = CGFloat(cotty_config_padding())
 
         // Background
