@@ -109,7 +109,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         fileMenu.addItem(saveAsItem)
 
         fileMenu.addItem(.separator())
-        fileMenu.addItem(withTitle: "Close Tab", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        let reloadConfigItem = NSMenuItem(title: "Reload Config", action: #selector(WorkspaceWindowController.reloadConfig(_:)), keyEquivalent: ",")
+        reloadConfigItem.keyEquivalentModifierMask = [.command, .shift]
+        fileMenu.addItem(reloadConfigItem)
+        fileMenu.addItem(.separator())
+        fileMenu.addItem(withTitle: "Close Tab", action: #selector(WorkspaceWindowController.closeActivePane(_:)), keyEquivalent: "w")
         fileMenuItem.submenu = fileMenu
         mainMenu.addItem(fileMenuItem)
 
@@ -133,6 +137,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let inspectorItem = NSMenuItem(title: "Terminal Inspector", action: #selector(WorkspaceWindowController.toggleTerminalInspector(_:)), keyEquivalent: "i")
         inspectorItem.keyEquivalentModifierMask = [.command, .option]
         viewMenu.addItem(inspectorItem)
+        viewMenu.addItem(.separator())
+        let paletteItem = NSMenuItem(title: "Command Palette", action: #selector(WorkspaceWindowController.toggleCommandPalette(_:)), keyEquivalent: "P")
+        paletteItem.keyEquivalentModifierMask = [.command, .shift]
+        viewMenu.addItem(paletteItem)
+        viewMenu.addItem(.separator())
+        viewMenu.addItem(withTitle: "Increase Font Size", action: #selector(WorkspaceWindowController.increaseFontSize(_:)), keyEquivalent: "=")
+        viewMenu.addItem(withTitle: "Decrease Font Size", action: #selector(WorkspaceWindowController.decreaseFontSize(_:)), keyEquivalent: "-")
+        viewMenu.addItem(withTitle: "Reset Font Size", action: #selector(WorkspaceWindowController.resetFontSize(_:)), keyEquivalent: "0")
+        viewMenu.addItem(.separator())
+        viewMenu.addItem(withTitle: "Split Right", action: #selector(WorkspaceWindowController.splitRight(_:)), keyEquivalent: "d")
+        let splitDownItem = NSMenuItem(title: "Split Down", action: #selector(WorkspaceWindowController.splitDown(_:)), keyEquivalent: "d")
+        splitDownItem.keyEquivalentModifierMask = [.command, .shift]
+        viewMenu.addItem(splitDownItem)
+        viewMenu.addItem(.separator())
         viewMenu.addItem(withTitle: "Toggle Full Screen", action: #selector(NSWindow.toggleFullScreen(_:)), keyEquivalent: "f")
         viewMenuItem.submenu = viewMenu
         mainMenu.addItem(viewMenuItem)

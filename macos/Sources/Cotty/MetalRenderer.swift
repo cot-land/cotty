@@ -9,7 +9,7 @@ class MetalRenderer {
     let device: MTLDevice
     let commandQueue: MTLCommandQueue
     let pipelineState: MTLRenderPipelineState
-    let atlas: GlyphAtlas
+    private(set) var atlas: GlyphAtlas
     let scaleFactor: CGFloat
 
     var cellWidthPoints: CGFloat { CGFloat(atlas.cellWidth) / scaleFactor }
@@ -118,6 +118,13 @@ class MetalRenderer {
         desc.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha
 
         self.pipelineState = try! device.makeRenderPipelineState(descriptor: desc)
+    }
+
+    /// Recreate the glyph atlas with the current Theme font size.
+    func rebuildAtlas() {
+        let fontSize = Theme.shared.fontSize * scaleFactor
+        let font = CTFontCreateWithName(Theme.shared.fontName as CFString, fontSize, nil)
+        atlas = GlyphAtlas(device: device, font: font)
     }
 
     func render(

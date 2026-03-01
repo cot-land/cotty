@@ -183,6 +183,21 @@ int64_t cotty_config_sel_bg_b(void);
 int64_t cotty_config_sel_fg_r(void);
 int64_t cotty_config_sel_fg_g(void);
 int64_t cotty_config_sel_fg_b(void);
+void cotty_config_set_font_size(int64_t size);
+void cotty_config_reload(void);
+
+// Command Palette
+void cotty_palette_toggle(void);
+int64_t cotty_palette_active(void);
+void cotty_palette_dismiss(void);
+void cotty_palette_set_query(const uint8_t *ptr, int64_t len);
+int64_t cotty_palette_result_count(void);
+int64_t cotty_palette_result_title(int64_t index);
+int64_t cotty_palette_result_title_len(int64_t index);
+int64_t cotty_palette_result_tag(int64_t index);
+int64_t cotty_palette_selected(void);
+void cotty_palette_move_up(void);
+void cotty_palette_move_down(void);
 
 // Workspace
 typedef int64_t cotty_workspace_t;
@@ -213,6 +228,25 @@ void cotty_workspace_tab_set_inspector_visible(cotty_workspace_t ws, int64_t ind
 int64_t cotty_workspace_tab_title(cotty_workspace_t ws, int64_t index);
 int64_t cotty_workspace_tab_title_len(cotty_workspace_t ws, int64_t index);
 int64_t cotty_workspace_preview_tab_index(cotty_workspace_t ws);
+
+// Split panes
+int64_t cotty_workspace_split(cotty_workspace_t ws, int64_t direction, int64_t rows, int64_t cols);
+int64_t cotty_workspace_close_split(cotty_workspace_t ws);
+void cotty_workspace_split_move_focus(cotty_workspace_t ws, int64_t direction);
+void cotty_workspace_split_set_ratio(cotty_workspace_t ws, int64_t node_idx, int64_t ratio);
+int64_t cotty_workspace_is_split(cotty_workspace_t ws);
+int64_t cotty_workspace_focused_surface(cotty_workspace_t ws);
+
+// Split tree queries
+int64_t cotty_workspace_split_node_count(cotty_workspace_t ws);
+int64_t cotty_workspace_split_node_is_leaf(cotty_workspace_t ws, int64_t idx);
+int64_t cotty_workspace_split_node_surface(cotty_workspace_t ws, int64_t idx);
+int64_t cotty_workspace_split_node_direction(cotty_workspace_t ws, int64_t idx);
+int64_t cotty_workspace_split_node_ratio(cotty_workspace_t ws, int64_t idx);
+int64_t cotty_workspace_split_node_left(cotty_workspace_t ws, int64_t idx);
+int64_t cotty_workspace_split_node_right(cotty_workspace_t ws, int64_t idx);
+int64_t cotty_workspace_split_root(cotty_workspace_t ws);
+int64_t cotty_workspace_split_focused(cotty_workspace_t ws);
 
 // Workspace state
 int64_t cotty_workspace_sidebar_visible(cotty_workspace_t ws);

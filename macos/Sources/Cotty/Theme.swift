@@ -93,4 +93,16 @@ class Theme {
         selG = UInt8(clamping: cotty_config_sel_bg_g())
         selB = UInt8(clamping: cotty_config_sel_bg_b())
     }
+
+    /// Set font size via FFI and update local value.
+    func setFontSize(_ size: CGFloat) {
+        cotty_config_set_font_size(Int64(size))
+        fontSize = CGFloat(cotty_config_font_size())
+    }
+
+    /// Reload config from disk and refresh all theme values.
+    func reload() {
+        cotty_config_reload()
+        load()
+    }
 }

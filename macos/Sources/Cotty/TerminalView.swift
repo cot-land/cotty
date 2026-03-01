@@ -349,33 +349,74 @@ class TerminalView: NSView {
         renderFrame()
     }
 
+    // MARK: - Copy / Paste
+
+    @objc func copySelection(_ sender: Any?) {
+        surface.lockTerminal()
+        let hasSelection = surface.selectionActive
+        let text = hasSelection ? surface.selectedText : nil
+        if hasSelection {
+            surface.selectionClear()
+        }
+        surface.unlockTerminal()
+        if let text {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+            renderFrame()
+        }
+    }
+
+    @objc func pasteFromClipboard(_ sender: Any?) {
+        guard let pasteString = NSPasteboard.general.string(forType: .string) else { return }
+        let termString = pasteString.replacingOccurrences(of: "\n", with: "\r")
+        surface.lockTerminal()
+        let bracketed = surface.bracketedPasteMode
+        surface.unlockTerminal()
+        if bracketed {
+            if let data = "\u{1b}[200~".data(using: .utf8) {
+                surface.terminalWrite(data)
+            }
+            if let data = termString.data(using: .utf8) {
+                surface.terminalWrite(data)
+            }
+            if let data = "\u{1b}[201~".data(using: .utf8) {
+                surface.terminalWrite(data)
+            }
+        } else {
+            if let data = termString.data(using: .utf8) {
+                surface.terminalWrite(data)
+            }
+        }
+    }
+
+    // MARK: - Context Menu
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = NSMenu()
+
+        surface.lockTerminal()
+        let hasSelection = surface.selectionActive
+        surface.unlockTerminal()
+
+        if hasSelection {
+            menu.addItem(withTitle: "Copy", action: #selector(copySelection(_:)), keyEquivalent: "")
+        }
+        menu.addItem(withTitle: "Paste", action: #selector(pasteFromClipboard(_:)), keyEquivalent: "")
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Split Right", action: #selector(WorkspaceWindowController.splitRight(_:)), keyEquivalent: "")
+        menu.addItem(withTitle: "Split Down", action: #selector(WorkspaceWindowController.splitDown(_:)), keyEquivalent: "")
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Toggle Inspector", action: #selector(WorkspaceWindowController.toggleTerminalInspector(_:)), keyEquivalent: "")
+
+        return menu
+    }
+
     // MARK: - Input Handling
 
     override func keyDown(with event: NSEvent) {
         // Cmd+V → paste from clipboard
         if event.modifierFlags.contains(.command) && event.charactersIgnoringModifiers == "v" {
-            guard let pasteString = NSPasteboard.general.string(forType: .string) else { return }
-            // Replace \n with \r for terminal input
-            let termString = pasteString.replacingOccurrences(of: "\n", with: "\r")
-            surface.lockTerminal()
-            let bracketed = surface.bracketedPasteMode
-            surface.unlockTerminal()
-            if bracketed {
-                // Bracketed paste: ESC[200~ content ESC[201~
-                if let data = "\u{1b}[200~".data(using: .utf8) {
-                    surface.terminalWrite(data)
-                }
-                if let data = termString.data(using: .utf8) {
-                    surface.terminalWrite(data)
-                }
-                if let data = "\u{1b}[201~".data(using: .utf8) {
-                    surface.terminalWrite(data)
-                }
-            } else {
-                if let data = termString.data(using: .utf8) {
-                    surface.terminalWrite(data)
-                }
-            }
+            pasteFromClipboard(nil)
             return
         }
 
@@ -383,15 +424,9 @@ class TerminalView: NSView {
         if event.modifierFlags.contains(.command) && event.charactersIgnoringModifiers == "c" {
             surface.lockTerminal()
             let hasSelection = surface.selectionActive
-            let text = hasSelection ? surface.selectedText : nil
-            if hasSelection {
-                surface.selectionClear()
-            }
             surface.unlockTerminal()
-            if let text {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(text, forType: .string)
-                renderFrame()
+            if hasSelection {
+                copySelection(nil)
                 return
             }
         }
@@ -477,6 +512,7 @@ class TerminalView: NSView {
                     surface.terminalWrite(data)
                 }
             }
+            updateFocusBorder(focused: true)
         }
         return result
     }
@@ -492,8 +528,20 @@ class TerminalView: NSView {
                     surface.terminalWrite(data)
                 }
             }
+            updateFocusBorder(focused: false)
         }
         return result
+    }
+
+    private func updateFocusBorder(focused: Bool) {
+        wantsLayer = true
+        if focused {
+            layer?.borderWidth = 1
+            layer?.borderColor = NSColor(red: 0.3, green: 0.5, blue: 1.0, alpha: 0.6).cgColor
+        } else {
+            layer?.borderWidth = 0
+            layer?.borderColor = nil
+        }
     }
 
     // MARK: - Cursor Blink

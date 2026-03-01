@@ -100,6 +100,43 @@ final class CottyWorkspace {
         Int(cotty_workspace_preview_tab_index(handle))
     }
 
+    // MARK: - Split Panes
+
+    func split(direction: Int, rows: Int, cols: Int) -> cotty_surface_t {
+        cotty_workspace_split(handle, Int64(direction), Int64(rows), Int64(cols))
+    }
+
+    func closeSplit() -> cotty_surface_t {
+        cotty_workspace_close_split(handle)
+    }
+
+    func splitMoveFocus(direction: Int) {
+        cotty_workspace_split_move_focus(handle, Int64(direction))
+    }
+
+    func splitSetRatio(nodeIndex: Int, ratio: Int) {
+        cotty_workspace_split_set_ratio(handle, Int64(nodeIndex), Int64(ratio))
+    }
+
+    var isSplit: Bool {
+        cotty_workspace_is_split(handle) != 0
+    }
+
+    var focusedSurface: cotty_surface_t {
+        cotty_workspace_focused_surface(handle)
+    }
+
+    // Split tree queries
+    var splitNodeCount: Int { Int(cotty_workspace_split_node_count(handle)) }
+    func splitNodeIsLeaf(_ idx: Int) -> Bool { cotty_workspace_split_node_is_leaf(handle, Int64(idx)) != 0 }
+    func splitNodeSurface(_ idx: Int) -> cotty_surface_t { cotty_workspace_split_node_surface(handle, Int64(idx)) }
+    func splitNodeDirection(_ idx: Int) -> Int { Int(cotty_workspace_split_node_direction(handle, Int64(idx))) }
+    func splitNodeRatio(_ idx: Int) -> Int { Int(cotty_workspace_split_node_ratio(handle, Int64(idx))) }
+    func splitNodeLeft(_ idx: Int) -> Int { Int(cotty_workspace_split_node_left(handle, Int64(idx))) }
+    func splitNodeRight(_ idx: Int) -> Int { Int(cotty_workspace_split_node_right(handle, Int64(idx))) }
+    var splitRoot: Int { Int(cotty_workspace_split_root(handle)) }
+    var splitFocused: Int { Int(cotty_workspace_split_focused(handle)) }
+
     // MARK: - Workspace State
 
     var sidebarVisible: Bool {

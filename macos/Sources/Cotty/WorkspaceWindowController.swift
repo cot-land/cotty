@@ -29,6 +29,9 @@ class WorkspaceWindowController: NSWindowController, NSWindowDelegate, FileTreeD
     private var inspectorHeight: CGFloat = 260
     private let dividerHeight: CGFloat = 5
 
+    // Command palette overlay
+    private var paletteView: CommandPaletteView?
+
     private static var cascadePoint = NSPoint.zero
 
     // MARK: - Init
@@ -240,25 +243,32 @@ class WorkspaceWindowController: NSWindowController, NSWindowDelegate, FileTreeD
     func selectTab(at index: Int) {
         guard index >= 0, index < workspace.tabCount else { return }
 
-        // Hide current content + inspector
-        if let oldView = selectedView {
-            oldView.isHidden = true
+        // Hide current content + inspector + split containers
+        for sub in contentContainer.subviews {
+            if sub is SplitContainerView { sub.removeFromSuperview() }
+        }
+        for (_, view) in viewsBySurface {
+            view.isHidden = true
         }
         hideInspectorViews()
 
         workspace.selectTab(at: index)
-        let surfaceHandle = workspace.tabSurface(at: index)
-        guard let view = viewsBySurface[surfaceHandle] else { return }
 
-        // Add view to container if first time
-        if view.superview !== contentContainer {
-            contentContainer.addSubview(view)
+        // Check if this tab has splits
+        if workspace.isSplit {
+            rebuildSplitLayout()
+        } else {
+            let surfaceHandle = workspace.tabSurface(at: index)
+            guard let view = viewsBySurface[surfaceHandle] else { return }
+
+            if view.superview !== contentContainer {
+                contentContainer.addSubview(view)
+            }
+            view.isHidden = false
+            view.autoresizingMask = [.width, .height]
+            view.frame = contentContainer.bounds
+            window?.makeFirstResponder(view)
         }
-
-        // Show and layout
-        view.isHidden = false
-        view.autoresizingMask = [.width, .height]
-        view.frame = contentContainer.bounds
 
         // Restore inspector if terminal tab had it visible
         if workspace.tabIsTerminal(at: index) && workspace.tabInspectorVisible(at: index) {
@@ -268,7 +278,26 @@ class WorkspaceWindowController: NSWindowController, NSWindowDelegate, FileTreeD
         // Update chrome
         window?.title = tabDisplayTitle(at: index)
         reloadTabBar()
-        window?.makeFirstResponder(view)
+    }
+
+    /// Close the active pane. If in a split, closes just the focused pane.
+    /// If the last pane, closes the tab.
+    @objc func closeActivePane(_ sender: Any?) {
+        let idx = workspace.selectedIndex
+        guard idx >= 0 else { return }
+
+        if workspace.isSplit {
+            let closedHandle = workspace.closeSplit()
+            if closedHandle > 0 {
+                viewsBySurface[closedHandle]?.removeFromSuperview()
+                viewsBySurface.removeValue(forKey: closedHandle)
+                surfacesBySurface.removeValue(forKey: closedHandle)
+                // Rebuild split layout (may now be single pane)
+                rebuildSplitLayout()
+                return
+            }
+        }
+        closeTab(at: idx)
     }
 
     func closeTab(at index: Int) {
@@ -605,6 +634,209 @@ class WorkspaceWindowController: NSWindowController, NSWindowDelegate, FileTreeD
 
     func tabBarDidClickAddButton(_ tabBar: TabBarView) {
         addTerminalTab()
+    }
+
+    // MARK: - Command Palette
+
+    @objc func toggleCommandPalette(_ sender: Any?) {
+        if let pv = paletteView, !pv.isHidden {
+            pv.dismiss()
+            return
+        }
+        if paletteView == nil {
+            let pv = CommandPaletteView(frame: .zero)
+            pv.workspaceController = self
+            window?.contentView?.addSubview(pv)
+            paletteView = pv
+        }
+        paletteView?.show()
+    }
+
+    func paletteDidDismiss() {
+        window?.makeFirstResponder(selectedView)
+    }
+
+    func executePaletteAction(tag: Int) {
+        guard let delegate = NSApp.delegate as? AppDelegate else { return }
+        switch tag {
+        case 1: delegate.newWindow(self)
+        case 2: delegate.newTerminal(self)
+        case 3: delegate.newEditor(self)
+        case 4: toggleSidebar(self)
+        case 5: toggleTerminalInspector(self)
+        case 6: reloadConfig(self)
+        case 7: increaseFontSize(self)
+        case 8: decreaseFontSize(self)
+        case 9: resetFontSize(self)
+        case 10: closeTab(at: workspace.selectedIndex)
+        default: break
+        }
+    }
+
+    // MARK: - Font Size
+
+    @objc func increaseFontSize(_ sender: Any?) {
+        adjustFontSize(to: Theme.shared.fontSize + 1)
+    }
+
+    @objc func decreaseFontSize(_ sender: Any?) {
+        adjustFontSize(to: Theme.shared.fontSize - 1)
+    }
+
+    @objc func resetFontSize(_ sender: Any?) {
+        // Reload config to get the default font size, then apply it
+        Theme.shared.reload()
+        // rebuildAtlas is needed since reload changed the theme
+        for (_, view) in viewsBySurface {
+            if let tv = view as? TerminalView {
+                tv.renderer.rebuildAtlas()
+                tv.setFrameSize(tv.frame.size)
+            }
+        }
+        window?.backgroundColor = Theme.shared.background
+    }
+
+    private func adjustFontSize(to size: CGFloat) {
+        Theme.shared.setFontSize(size)
+        // Rebuild atlas on all terminal views in this window
+        for (_, view) in viewsBySurface {
+            if let tv = view as? TerminalView {
+                tv.renderer.rebuildAtlas()
+                tv.setFrameSize(tv.frame.size)
+            }
+        }
+        window?.backgroundColor = Theme.shared.background
+    }
+
+    // MARK: - Split Panes
+
+    @objc func splitRight(_ sender: Any?) {
+        performSplit(direction: 1) // SPLIT_HORIZONTAL
+    }
+
+    @objc func splitDown(_ sender: Any?) {
+        performSplit(direction: 2) // SPLIT_VERTICAL
+    }
+
+    private func performSplit(direction: Int) {
+        guard let app = workspace.app else { return }
+        let (rows, cols) = terminalGridSizeForContent()
+        let surfaceHandle = workspace.split(direction: direction, rows: rows, cols: cols)
+        guard surfaceHandle > 0 else { return }
+        let surface = CottySurface(app: app, handle: surfaceHandle)
+        let tv = TerminalView(frame: contentContainer.bounds, surface: surface)
+        tv.workspaceController = self
+        viewsBySurface[surfaceHandle] = tv
+        surfacesBySurface[surfaceHandle] = surface
+        rebuildSplitLayout()
+    }
+
+    func rebuildSplitLayout() {
+        let idx = workspace.selectedIndex
+        guard idx >= 0, idx < workspace.tabCount else { return }
+
+        if !workspace.isSplit {
+            // Single view — remove split container, show view directly
+            for sub in contentContainer.subviews {
+                if sub is SplitContainerView { sub.removeFromSuperview() }
+            }
+            if let view = selectedView {
+                view.isHidden = false
+                view.autoresizingMask = [.width, .height]
+                if view.superview !== contentContainer {
+                    contentContainer.addSubview(view)
+                }
+                view.frame = contentContainer.bounds
+                window?.makeFirstResponder(view)
+            }
+            return
+        }
+
+        // Hide all views first
+        for (_, view) in viewsBySurface {
+            view.isHidden = true
+        }
+
+        // Build split container
+        let container = SplitContainerView(frame: contentContainer.bounds)
+        container.workspaceController = self
+        // Remove old split containers
+        for sub in contentContainer.subviews {
+            if sub is SplitContainerView { sub.removeFromSuperview() }
+        }
+        contentContainer.addSubview(container)
+
+        container.rebuild(workspace: workspace) { [weak self] handle in
+            guard let self else { return nil }
+            let view = self.viewsBySurface[handle]
+            view?.isHidden = false
+            if let tv = view as? TerminalView {
+                tv.removeFromSuperview()
+            } else {
+                view?.removeFromSuperview()
+            }
+            return view
+        }
+
+        // Focus the active split's terminal
+        let focusedHandle = workspace.focusedSurface
+        if let focusView = viewsBySurface[focusedHandle] {
+            window?.makeFirstResponder(focusView)
+        }
+    }
+
+    /// Resize all visible terminal views (called after split divider drag).
+    func resizeTerminalViewsInSplits() {
+        for (_, view) in viewsBySurface {
+            if let tv = view as? TerminalView, !tv.isHidden, tv.superview != nil {
+                tv.setFrameSize(tv.frame.size)
+            }
+        }
+    }
+
+    @objc func focusSplitRight(_ sender: Any?) {
+        workspace.splitMoveFocus(direction: 1)
+        focusActiveSplit()
+    }
+
+    @objc func focusSplitDown(_ sender: Any?) {
+        workspace.splitMoveFocus(direction: 2)
+        focusActiveSplit()
+    }
+
+    @objc func focusSplitLeft(_ sender: Any?) {
+        workspace.splitMoveFocus(direction: 3)
+        focusActiveSplit()
+    }
+
+    @objc func focusSplitUp(_ sender: Any?) {
+        workspace.splitMoveFocus(direction: 4)
+        focusActiveSplit()
+    }
+
+    private func focusActiveSplit() {
+        let handle = workspace.focusedSurface
+        if let view = viewsBySurface[handle] {
+            window?.makeFirstResponder(view)
+        }
+    }
+
+    /// Look up a view by its surface handle (used by SplitContainerView).
+    func viewForSurface(_ handle: cotty_surface_t) -> NSView? {
+        viewsBySurface[handle]
+    }
+
+    // MARK: - Config Reload
+
+    @objc func reloadConfig(_ sender: Any?) {
+        Theme.shared.reload()
+        window?.backgroundColor = Theme.shared.background
+        for (_, view) in viewsBySurface {
+            if let tv = view as? TerminalView {
+                tv.renderer.rebuildAtlas()
+                tv.setFrameSize(tv.frame.size)
+            }
+        }
     }
 
     // MARK: - NSWindowDelegate
