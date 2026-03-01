@@ -26,13 +26,13 @@ If the Cot compiler doesn't support a pattern you need, **STOP and tell the user
 CLAUDE.md          This file
 .gitmodules        libcotty submodule reference
 .mcp.json          MCP config
+libcotty.dylib     Symlink → libcotty/libcotty.dylib (gitignored)
 libcotty/          Git submodule → cot-land/libcotty (all Cot source)
 macos/
   Package.swift
   Sources/
     CCottyCore/
       include/cotty.h    FFI header (Swift ↔ Cot bridge)
-      lib/               Built dylib (gitignored)
       shim.c
     Cotty/
       *.swift            macOS app (AppKit, Metal rendering)
@@ -42,10 +42,10 @@ macos/
 
 ```bash
 # Build Cot dylib from submodule
-cd libcotty && cot build src/ffi.cot --lib -o libcotty.dylib
+cd libcotty && cot build src/ffi.cot --lib -o libcotty.dylib && cd ..
 
-# Copy to Swift project
-cp libcotty/libcotty.dylib macos/Sources/CCottyCore/lib/
+# Ensure root symlink exists (one-time setup)
+ln -sf libcotty/libcotty.dylib libcotty.dylib
 
 # Build Swift app
 cd macos && swift build
@@ -53,6 +53,8 @@ cd macos && swift build
 # Binary at
 macos/.build/debug/Cotty
 ```
+
+The root `libcotty.dylib` symlink is needed because the Cot compiler emits bare install names. The Swift linker (`-L..`) and dyld rpath both resolve to the cotty root. The symlink is gitignored.
 
 ## Cot Backend (libcotty submodule)
 

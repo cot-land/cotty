@@ -10,8 +10,9 @@ The terminal emulation backend lives in [libcotty](https://github.com/cot-land/l
 git clone --recursive https://github.com/cot-land/cotty.git
 cd cotty
 
-# Set up stdlib symlink in libcotty (one-time)
+# One-time setup
 cd libcotty && ln -s ~/cotlang/cot/stdlib stdlib && cd ..
+ln -sf libcotty/libcotty.dylib libcotty.dylib
 ```
 
 ## Build
@@ -20,12 +21,11 @@ cd libcotty && ln -s ~/cotlang/cot/stdlib stdlib && cd ..
 # Build Cot backend
 cd libcotty && cot build src/ffi.cot --lib -o libcotty.dylib && cd ..
 
-# Copy dylib and build Swift app
-cp libcotty/libcotty.dylib macos/Sources/CCottyCore/lib/
+# Build Swift app
 cd macos && swift build
 
 # Run
-.build/debug/Cotty
+macos/.build/debug/Cotty
 ```
 
 ## Architecture
