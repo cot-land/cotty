@@ -76,7 +76,8 @@ class WorkspaceWindowController: NSWindowController, NSWindowDelegate, FileTreeD
                 title: tabDisplayTitle(at: i),
                 isPreview: workspace.tabIsPreview(at: i),
                 isDirty: workspace.tabIsDirty(at: i),
-                isTerminal: workspace.tabIsTerminal(at: i)
+                isTerminal: workspace.tabIsTerminal(at: i),
+                shortcutIndex: i < 9 ? i : -1
             )
         }
     }
@@ -97,6 +98,18 @@ class WorkspaceWindowController: NSWindowController, NSWindowDelegate, FileTreeD
     private func reloadTabBar() {
         tabBarView.reloadTabs(buildTabInfos(), selectedIndex: workspace.selectedIndex)
     }
+
+    // MARK: - Cmd+1–9 Tab Switching
+
+    @objc func selectTab1(_ sender: Any?) { selectTab(at: 0) }
+    @objc func selectTab2(_ sender: Any?) { selectTab(at: 1) }
+    @objc func selectTab3(_ sender: Any?) { selectTab(at: 2) }
+    @objc func selectTab4(_ sender: Any?) { selectTab(at: 3) }
+    @objc func selectTab5(_ sender: Any?) { selectTab(at: 4) }
+    @objc func selectTab6(_ sender: Any?) { selectTab(at: 5) }
+    @objc func selectTab7(_ sender: Any?) { selectTab(at: 6) }
+    @objc func selectTab8(_ sender: Any?) { selectTab(at: 7) }
+    @objc func selectTab9(_ sender: Any?) { selectTab(at: max(0, workspace.tabCount - 1)) }
 
     // MARK: - Window Setup
 

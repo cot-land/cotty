@@ -137,6 +137,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         viewMenuItem.submenu = viewMenu
         mainMenu.addItem(viewMenuItem)
 
+        // Window menu (Cmd+1–9 tab switching)
+        let windowMenuItem = NSMenuItem()
+        let windowMenu = NSMenu(title: "Window")
+        for i in 1...9 {
+            let item = NSMenuItem(
+                title: "Select Tab \(i)",
+                action: NSSelectorFromString("selectTab\(i):"),
+                keyEquivalent: "\(i)"
+            )
+            windowMenu.addItem(item)
+        }
+        windowMenuItem.submenu = windowMenu
+        mainMenu.addItem(windowMenuItem)
+
         NSApp.mainMenu = mainMenu
     }
 }

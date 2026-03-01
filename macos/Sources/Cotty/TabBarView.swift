@@ -68,6 +68,7 @@ class TabBarView: NSView {
         let isPreview: Bool
         let isDirty: Bool
         let isTerminal: Bool
+        let shortcutIndex: Int  // 0–8 → ⌘1–⌘9, -1 → no shortcut
     }
 
     func reloadTabs(_ tabInfos: [TabInfo], selectedIndex: Int) {
@@ -89,7 +90,8 @@ class TabBarView: NSView {
                 isSelected: i == selectedIndex,
                 isPreview: info.isPreview,
                 isDirty: info.isDirty,
-                isTerminal: info.isTerminal
+                isTerminal: info.isTerminal,
+                shortcutIndex: info.shortcutIndex
             )
             let idx = i
             btn.onSelect = { [weak self] in
@@ -121,7 +123,8 @@ class TabBarView: NSView {
             isSelected: btn.currentlySelected,
             isPreview: isPreview,
             isDirty: isDirty,
-            isTerminal: btn.currentlyTerminal
+            isTerminal: btn.currentlyTerminal,
+            shortcutIndex: btn.currentShortcutIndex
         )
     }
 
@@ -287,6 +290,7 @@ private class TabButton: NSView {
     private let iconView = NSImageView()
     private let titleField = NSTextField(labelWithString: "")
     private let closeBtn = TabCloseButton()
+    private let shortcutField = NSTextField(labelWithString: "")
     private var trackingArea: NSTrackingArea?
     private var isHovering = false
     private let cornerRadius: CGFloat
@@ -294,6 +298,7 @@ private class TabButton: NSView {
     private(set) var currentlySelected = false
     private var currentlyPreview = false
     private(set) var currentlyTerminal = false
+    private(set) var currentShortcutIndex: Int = -1
 
     var onSelect: (() -> Void)?
     var onClose: (() -> Void)?
@@ -329,7 +334,7 @@ private class TabButton: NSView {
         let mouse = convert(window.mouseLocationOutsideOfEventStream, from: nil)
         if !bounds.contains(mouse) {
             isHovering = false
-            closeBtn.isHidden = !currentlySelected
+            updateRightAccessory()
             needsDisplay = true
             needsLayout = true
         }
@@ -358,6 +363,17 @@ private class TabButton: NSView {
         titleField.cell?.wraps = false
         addSubview(titleField)
 
+        // Shortcut label (e.g. "⌘1")
+        shortcutField.isBezeled = false
+        shortcutField.drawsBackground = false
+        shortcutField.isEditable = false
+        shortcutField.isSelectable = false
+        shortcutField.alignment = .center
+        shortcutField.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+        shortcutField.textColor = .tertiaryLabelColor
+        shortcutField.isHidden = true
+        addSubview(shortcutField)
+
         // Close button
         closeBtn.onClose = { [weak self] in self?.onClose?() }
         closeBtn.isHidden = true
@@ -367,10 +383,11 @@ private class TabButton: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(title: String, isSelected: Bool, isPreview: Bool, isDirty: Bool, isTerminal: Bool) {
+    func configure(title: String, isSelected: Bool, isPreview: Bool, isDirty: Bool, isTerminal: Bool, shortcutIndex: Int = -1) {
         currentlySelected = isSelected
         currentlyPreview = isPreview
         currentlyTerminal = isTerminal
+        currentShortcutIndex = shortcutIndex
 
         // Title
         let displayTitle = isDirty ? "\u{25CF} \(title)" : title
@@ -390,11 +407,24 @@ private class TabButton: NSView {
             .withSymbolConfiguration(config)
         iconView.contentTintColor = isSelected ? .labelColor : .tertiaryLabelColor
 
-        // Close button
-        closeBtn.isHidden = !(isSelected || isHovering)
+        // Shortcut label
+        if shortcutIndex >= 0 {
+            shortcutField.stringValue = "⌘\(shortcutIndex + 1)"
+        }
+        shortcutField.textColor = isSelected ? .secondaryLabelColor : .tertiaryLabelColor
+
+        // Close button vs shortcut label: show close on selected/hover, shortcut otherwise
+        updateRightAccessory()
 
         needsDisplay = true
         needsLayout = true
+    }
+
+    private func updateRightAccessory() {
+        // Ghostty style: shortcut always visible, close only on hover
+        let showClose = isHovering
+        closeBtn.isHidden = !showClose
+        shortcutField.isHidden = showClose || currentShortcutIndex < 0
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -443,9 +473,22 @@ private class TabButton: NSView {
             height: closeBtnSize
         )
 
-        // Title between icon and close button
+        // Shortcut label (same position as close button)
+        let shortcutH = shortcutField.intrinsicContentSize.height
+        let shortcutW = shortcutField.intrinsicContentSize.width
+        shortcutField.frame = NSRect(
+            x: bounds.width - shortcutW - hPad,
+            y: (h - shortcutH) / 2,
+            width: shortcutW,
+            height: shortcutH
+        )
+
+        // Title between icon and right accessory area.
+        // Always reserve space when a shortcut exists — the slot is never empty
+        // (shortcut label when idle, close button on hover).
+        let hasRightAccessory = currentShortcutIndex >= 0 || !closeBtn.isHidden
         let titleLeft = hPad + iconSize + gap
-        let titleRight = closeBtn.isHidden ? hPad : closeBtnSize + hPad + 4
+        let titleRight = hasRightAccessory ? closeBtnSize + hPad + 4 : hPad
         let titleW = max(0, bounds.width - titleLeft - titleRight)
         let textH = titleField.intrinsicContentSize.height
         titleField.frame = NSRect(
@@ -471,14 +514,14 @@ private class TabButton: NSView {
 
     override func mouseEntered(with event: NSEvent) {
         isHovering = true
-        closeBtn.isHidden = false
+        updateRightAccessory()
         needsDisplay = true
         needsLayout = true
     }
 
     override func mouseExited(with event: NSEvent) {
         isHovering = false
-        closeBtn.isHidden = !currentlySelected
+        updateRightAccessory()
         needsDisplay = true
         needsLayout = true
     }
