@@ -32,6 +32,9 @@ class WorkspaceWindowController: NSWindowController, NSWindowDelegate, FileTreeD
     // Command palette overlay
     private var paletteView: CommandPaletteView?
 
+    // Theme selector overlay
+    private var themeSelectorView: ThemeSelectorView?
+
     private static var cascadePoint = NSPoint.zero
 
     // MARK: - Init
@@ -319,6 +322,12 @@ class WorkspaceWindowController: NSWindowController, NSWindowDelegate, FileTreeD
         }
 
         selectTab(at: workspace.selectedIndex)
+    }
+
+    /// Close a terminal tab when its child process exits.
+    func closeTerminalView(_ view: TerminalView) {
+        guard let index = tabIndex(for: view) else { return }
+        closeTab(at: index)
     }
 
     /// Find the tab index for a given view.
@@ -656,6 +665,38 @@ class WorkspaceWindowController: NSWindowController, NSWindowDelegate, FileTreeD
         window?.makeFirstResponder(selectedView)
     }
 
+    // MARK: - Theme Selector
+
+    @objc func showThemeSelector(_ sender: Any?) {
+        if let tv = themeSelectorView, !tv.isHidden {
+            tv.dismiss()
+            return
+        }
+        if themeSelectorView == nil {
+            let tv = ThemeSelectorView(frame: .zero)
+            tv.workspaceController = self
+            window?.contentView?.addSubview(tv)
+            themeSelectorView = tv
+        }
+        themeSelectorView?.show()
+    }
+
+    func themeSelectorDidDismiss() {
+        window?.makeFirstResponder(selectedView)
+    }
+
+    /// Refresh Theme.shared from already-updated FFI config (no disk reload) and rebuild views.
+    func applyThemeChange() {
+        Theme.shared.load()
+        window?.backgroundColor = Theme.shared.background
+        for (_, view) in viewsBySurface {
+            if let tv = view as? TerminalView {
+                tv.renderer.rebuildAtlas()
+                tv.setFrameSize(tv.frame.size)
+            }
+        }
+    }
+
     func executePaletteAction(tag: Int) {
         guard let delegate = NSApp.delegate as? AppDelegate else { return }
         switch tag {
@@ -669,6 +710,7 @@ class WorkspaceWindowController: NSWindowController, NSWindowDelegate, FileTreeD
         case 8: decreaseFontSize(self)
         case 9: resetFontSize(self)
         case 10: closeTab(at: workspace.selectedIndex)
+        case 11: showThemeSelector(self)
         default: break
         }
     }

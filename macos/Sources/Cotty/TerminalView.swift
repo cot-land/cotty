@@ -159,6 +159,10 @@ class TerminalView: NSView {
             guard let self else { return }
             // Drain the pipe (rendering is handled by VSync display link)
             while Darwin.read(fd, self.notifyBuffer, 1024) > 0 {}
+            // Check if child process has exited — close this tab
+            if self.surface.childExited {
+                self.workspaceController?.closeTerminalView(self)
+            }
         }
         source.setCancelHandler { /* pipe closed by cotty_terminal_surface_free */ }
         source.resume()

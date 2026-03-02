@@ -125,6 +125,9 @@ final class CottySurface {
     /// Returns true if the IO thread produced new content since last check.
     var renderDirty: Bool { cotty_terminal_check_dirty(handle) != 0 }
 
+    /// Check if the child process has exited.
+    var childExited: Bool { cotty_terminal_child_exited(handle) != 0 }
+
     // MARK: - Terminal I/O
 
     var ptyFd: Int32 { Int32(cotty_terminal_pty_fd(handle)) }

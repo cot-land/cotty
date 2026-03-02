@@ -64,6 +64,7 @@ void cotty_terminal_lock(cotty_surface_t surface);
 void cotty_terminal_unlock(cotty_surface_t surface);
 int64_t cotty_terminal_notify_fd(cotty_surface_t surface);
 int64_t cotty_terminal_check_dirty(cotty_surface_t surface);
+int64_t cotty_terminal_child_exited(cotty_surface_t surface);
 
 // Terminal input
 void cotty_terminal_key(cotty_surface_t surface, int64_t key, int64_t mods);
