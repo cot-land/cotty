@@ -522,6 +522,14 @@ class TerminalView: NSView {
             return
         }
 
+        // Option-as-alt: when disabled, let macOS produce composed characters (é, ñ, etc.)
+        // Ghostty ref: SurfaceView_AppKit.swift — option_as_alt config
+        if event.modifierFlags.contains(.option) && !Theme.shared.optionAsAlt
+            && !event.modifierFlags.contains(.control) {
+            interpretKeyEvents([event])
+            return
+        }
+
         // Clear selection when typing
         surface.lockTerminal()
         if surface.selectionActive {
@@ -534,6 +542,22 @@ class TerminalView: NSView {
         // Route through Kitty-aware encoder (falls back to legacy when no flags)
         surface.lockTerminal()
         surface.terminalKeyEvent(key, mods: mods, eventType: 0)  // 0 = press
+        surface.unlockTerminal()
+        resetCursorBlink()
+    }
+
+    func insertText(_ string: Any, replacementRange: NSRange) {
+        // Called by interpretKeyEvents when option-as-alt is disabled.
+        // Sends the composed character (e.g., é) directly to the PTY.
+        guard let str = string as? String else { return }
+        surface.lockTerminal()
+        if surface.selectionActive {
+            surface.selectionClear()
+        }
+        surface.unlockTerminal()
+        let data = Data(str.utf8)
+        surface.lockTerminal()
+        surface.terminalWrite(data)
         surface.unlockTerminal()
         resetCursorBlink()
     }

@@ -40,6 +40,9 @@ class Theme {
     // Background opacity (0.0-1.0)
     var bgOpacity: Double = 1.0
 
+    // Option-as-alt: true = ESC prefix, false = macOS composed characters
+    var optionAsAlt: Bool = true
+
     /// Load theme values from Cot config via FFI.
     /// Must be called after cotty_app_new().
     func load() {
@@ -80,6 +83,7 @@ class Theme {
         bgG = Double(bgGi) / 255.0
         bgB = Double(bgBi) / 255.0
         bgOpacity = Double(cotty_config_bg_opacity()) / 100.0
+        optionAsAlt = cotty_config_option_as_alt() != 0
         background = NSColor(red: bgR, green: bgG, blue: bgB, alpha: bgOpacity)
 
         // Foreground

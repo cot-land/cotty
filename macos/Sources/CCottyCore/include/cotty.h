@@ -189,6 +189,7 @@ int64_t cotty_config_sel_fg_r(void);
 int64_t cotty_config_sel_fg_g(void);
 int64_t cotty_config_sel_fg_b(void);
 int64_t cotty_config_bg_opacity(void);
+int64_t cotty_config_option_as_alt(void);
 void cotty_config_set_font_size(int64_t size);
 void cotty_config_reload(void);
 
