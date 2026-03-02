@@ -474,6 +474,8 @@ class TerminalView: NSView {
     // MARK: - Input Handling
 
     override func keyDown(with event: NSEvent) {
+        NSCursor.setHiddenUntilMouseMoves(true)
+
         // Cmd+V → paste from clipboard
         if event.modifierFlags.contains(.command) && event.charactersIgnoringModifiers == "v" {
             pasteFromClipboard(nil)

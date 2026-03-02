@@ -296,17 +296,11 @@ class MetalRenderer {
 
                 let flags = cellPtr.load(fromByteOffset: 40, as: Int64.self)
                 let isInverse = flags & 4 != 0
-                let isBold = flags & 1 != 0
                 let isDim = flags & 16 != 0
 
-                // Bold-as-bright: palette indices 0-7 shift to 8-15 when bold
-                var effectiveFgVal = fgVal
-                if isBold && fgType == 1 && fgVal >= 0 && fgVal < 8 {
-                    effectiveFgVal = fgVal + 8
-                }
-
+                // Bold-as-bright is applied in Cot at cell write time (terminal.cot putChar)
                 // Resolve FIRST, then swap for inverse (Ghostty: generic.zig:2827-2873)
-                var (fgR, fgG, fgB) = resolveColor(fgType, effectiveFgVal, palettePtr, defFgR, defFgG, defFgB)
+                var (fgR, fgG, fgB) = resolveColor(fgType, fgVal, palettePtr, defFgR, defFgG, defFgB)
                 var (bgR, bgG, bgB) = resolveColor(bgType, bgVal, palettePtr, defBgR, defBgG, defBgB)
 
                 if isInverse {
@@ -340,8 +334,10 @@ class MetalRenderer {
                     ))
                 }
 
-                // Foreground glyph
-                if codepoint >= 32 {
+                let isHidden = flags & 256 != 0  // CELL_HIDDEN
+
+                // Foreground glyph (skip if hidden)
+                if codepoint >= 32 && !isHidden {
                     let g = atlas.lookup(UInt32(codepoint))
                     cells.append(CellData(
                         gridX: UInt16(col), gridY: UInt16(row),
@@ -350,6 +346,74 @@ class MetalRenderer {
                         offX: 0, offY: 0,
                         r: fgR, g: fgG, b: fgB, a: fgAlpha
                     ))
+                }
+
+                // Text decorations: underline, strikethrough, overline
+                let hasUnderline = flags & 2 != 0      // CELL_UNDERLINE
+                let hasDoubleUL = flags & 1024 != 0     // CELL_DOUBLE_UNDERLINE
+                let hasStrike = flags & 64 != 0         // CELL_STRIKETHROUGH
+                let hasOverline = flags & 512 != 0      // CELL_OVERLINE
+
+                if hasUnderline || hasDoubleUL || hasStrike || hasOverline {
+                    // Decoration color: custom underline color if set, else fg color
+                    var decR = fgR, decG = fgG, decB = fgB
+                    if flags & 2048 != 0 {  // CELL_CUSTOM_UL_COLOR
+                        let ulType = cellPtr.load(fromByteOffset: 48, as: Int64.self)
+                        let ulVal = cellPtr.load(fromByteOffset: 56, as: Int64.self)
+                        (decR, decG, decB) = resolveColor(ulType, ulVal, palettePtr, fgR, fgG, fgB)
+                    }
+
+                    let lineH = UInt16(max(1, atlas.cellHeight / 14))
+                    let cellH = Int16(atlas.cellHeight)
+
+                    if hasUnderline {
+                        cells.append(CellData(
+                            gridX: UInt16(col), gridY: UInt16(row),
+                            atlasX: solid.atlasX, atlasY: solid.atlasY,
+                            glyphW: solid.width, glyphH: lineH,
+                            offX: 0, offY: cellH - Int16(lineH),
+                            r: decR, g: decG, b: decB, a: fgAlpha
+                        ))
+                    }
+
+                    if hasDoubleUL {
+                        // Two thin lines near the bottom
+                        let gap = max(lineH, 1)
+                        cells.append(CellData(
+                            gridX: UInt16(col), gridY: UInt16(row),
+                            atlasX: solid.atlasX, atlasY: solid.atlasY,
+                            glyphW: solid.width, glyphH: lineH,
+                            offX: 0, offY: cellH - Int16(lineH),
+                            r: decR, g: decG, b: decB, a: fgAlpha
+                        ))
+                        cells.append(CellData(
+                            gridX: UInt16(col), gridY: UInt16(row),
+                            atlasX: solid.atlasX, atlasY: solid.atlasY,
+                            glyphW: solid.width, glyphH: lineH,
+                            offX: 0, offY: cellH - Int16(lineH) - Int16(gap) - Int16(lineH),
+                            r: decR, g: decG, b: decB, a: fgAlpha
+                        ))
+                    }
+
+                    if hasStrike {
+                        cells.append(CellData(
+                            gridX: UInt16(col), gridY: UInt16(row),
+                            atlasX: solid.atlasX, atlasY: solid.atlasY,
+                            glyphW: solid.width, glyphH: lineH,
+                            offX: 0, offY: cellH / 2,
+                            r: decR, g: decG, b: decB, a: fgAlpha
+                        ))
+                    }
+
+                    if hasOverline {
+                        cells.append(CellData(
+                            gridX: UInt16(col), gridY: UInt16(row),
+                            atlasX: solid.atlasX, atlasY: solid.atlasY,
+                            glyphW: solid.width, glyphH: lineH,
+                            offX: 0, offY: 0,
+                            r: decR, g: decG, b: decB, a: fgAlpha
+                        ))
+                    }
                 }
             }
         }

@@ -274,6 +274,7 @@ final class CottySurface {
         if event.modifierFlags.contains(.control) { mods |= 1 }  // MOD_CTRL
         if event.modifierFlags.contains(.shift) { mods |= 2 }    // MOD_SHIFT
         if event.modifierFlags.contains(.option) { mods |= 4 }   // MOD_ALT
+        if event.modifierFlags.contains(.command) { mods |= 8 }  // MOD_SUPER
 
         // Special keys → Cot KEY_* constants
         switch event.keyCode {
@@ -303,6 +304,30 @@ final class CottySurface {
         case 109: return (273, mods)  // F10 → KEY_F10
         case 103: return (274, mods)  // F11 → KEY_F11
         case 111: return (275, mods)  // F12 → KEY_F12
+        case 105: return (277, mods)  // F13 → KEY_F13
+        case 107: return (278, mods)  // F14 → KEY_F14
+        case 113: return (279, mods)  // F15 → KEY_F15
+        case 106: return (280, mods)  // F16 → KEY_F16
+        case 64:  return (281, mods)  // F17 → KEY_F17
+        case 79:  return (282, mods)  // F18 → KEY_F18
+        case 80:  return (283, mods)  // F19 → KEY_F19
+        case 90:  return (284, mods)  // F20 → KEY_F20
+        case 76:  return (285, mods)  // KP Enter → KEY_KP_ENTER
+        case 82:  return (286, mods)  // KP 0 → KEY_KP_0
+        case 83:  return (287, mods)  // KP 1 → KEY_KP_1
+        case 84:  return (288, mods)  // KP 2 → KEY_KP_2
+        case 85:  return (289, mods)  // KP 3 → KEY_KP_3
+        case 86:  return (290, mods)  // KP 4 → KEY_KP_4
+        case 87:  return (291, mods)  // KP 5 → KEY_KP_5
+        case 88:  return (292, mods)  // KP 6 → KEY_KP_6
+        case 89:  return (293, mods)  // KP 7 → KEY_KP_7
+        case 91:  return (294, mods)  // KP 8 → KEY_KP_8
+        case 92:  return (295, mods)  // KP 9 → KEY_KP_9
+        case 65:  return (296, mods)  // KP . → KEY_KP_DECIMAL
+        case 67:  return (297, mods)  // KP * → KEY_KP_MULTIPLY
+        case 69:  return (298, mods)  // KP + → KEY_KP_PLUS
+        case 75:  return (299, mods)  // KP / → KEY_KP_DIVIDE
+        case 78:  return (300, mods)  // KP - → KEY_KP_MINUS
         default: break
         }
 
