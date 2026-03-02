@@ -332,12 +332,21 @@ class TerminalView: NSView {
         return (clampedRow, clampedCol)
     }
 
+    /// Extract Cot modifier bitmask from NSEvent (MOD_CTRL=1, MOD_SHIFT=2, MOD_ALT=4).
+    private func mouseMods(from event: NSEvent) -> Int64 {
+        var mods: Int64 = 0
+        if event.modifierFlags.contains(.control) { mods |= 1 }
+        if event.modifierFlags.contains(.shift) { mods |= 2 }
+        if event.modifierFlags.contains(.option) { mods |= 4 }
+        return mods
+    }
+
     override func mouseDown(with event: NSEvent) {
         let pos = gridPosition(from: event)
         surface.lockTerminal()
         if surface.mouseTrackingMode != 0 {
             // 1-indexed for SGR mouse protocol
-            surface.sendMouseEvent(button: 0, col: pos.col + 1, row: pos.row + 1, pressed: true)
+            surface.sendMouseEvent(button: 0, col: pos.col + 1, row: pos.row + 1, pressed: true, mods: mouseMods(from: event))
             surface.unlockTerminal()
             return
         }
@@ -358,7 +367,7 @@ class TerminalView: NSView {
         surface.lockTerminal()
         if surface.mouseTrackingMode >= 1002 {
             // Button-event or any-event tracking: report motion with button 32 (drag)
-            surface.sendMouseEvent(button: 32, col: pos.col + 1, row: pos.row + 1, pressed: true)
+            surface.sendMouseEvent(button: 32, col: pos.col + 1, row: pos.row + 1, pressed: true, mods: mouseMods(from: event))
             surface.unlockTerminal()
             return
         }
@@ -375,7 +384,7 @@ class TerminalView: NSView {
         let pos = gridPosition(from: event)
         surface.lockTerminal()
         if surface.mouseTrackingMode != 0 {
-            surface.sendMouseEvent(button: 0, col: pos.col + 1, row: pos.row + 1, pressed: false)
+            surface.sendMouseEvent(button: 0, col: pos.col + 1, row: pos.row + 1, pressed: false, mods: mouseMods(from: event))
             surface.unlockTerminal()
             return
         }

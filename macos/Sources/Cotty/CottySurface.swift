@@ -240,8 +240,8 @@ final class CottySurface {
     var mouseTrackingMode: Int64 { cotty_terminal_mouse_mode(handle) }
     var mouseFormat: Int64 { cotty_terminal_mouse_format(handle) }
 
-    func sendMouseEvent(button: Int64, col: Int, row: Int, pressed: Bool) {
-        cotty_terminal_mouse_event(handle, button, Int64(col), Int64(row), pressed ? 1 : 0)
+    func sendMouseEvent(button: Int64, col: Int, row: Int, pressed: Bool, mods: Int64 = 0) {
+        cotty_terminal_mouse_event(handle, button, Int64(col), Int64(row), pressed ? 1 : 0, mods)
     }
 
     func sendScroll(delta: Int64, precise: Int64, cellHeight: Int64, col: Int, row: Int) {
@@ -287,6 +287,7 @@ final class CottySurface {
         case 36:  return (13, mods)   // Return → KEY_ENTER
         case 48:  return (9, mods)    // Tab → KEY_TAB
         case 53:  return (27, mods)   // Escape → KEY_ESCAPE
+        case 114: return (276, mods)  // Help/Insert → KEY_INSERT
         case 122: return (264, mods)  // F1 → KEY_F1
         case 120: return (265, mods)  // F2 → KEY_F2
         case 99:  return (266, mods)  // F3 → KEY_F3

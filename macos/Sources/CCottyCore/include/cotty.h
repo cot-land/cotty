@@ -119,7 +119,7 @@ int64_t cotty_terminal_selected_text_len(cotty_surface_t surface);
 int64_t cotty_terminal_alt_screen(cotty_surface_t surface);
 int64_t cotty_terminal_mouse_mode(cotty_surface_t surface);
 int64_t cotty_terminal_mouse_format(cotty_surface_t surface);
-void cotty_terminal_mouse_event(cotty_surface_t surface, int64_t button, int64_t col, int64_t row, int64_t pressed);
+void cotty_terminal_mouse_event(cotty_surface_t surface, int64_t button, int64_t col, int64_t row, int64_t pressed, int64_t mods);
 void cotty_terminal_scroll(cotty_surface_t surface, int64_t delta, int64_t precise, int64_t cell_height, int64_t col, int64_t row);
 
 // Terminal cursor shape
