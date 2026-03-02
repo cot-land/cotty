@@ -256,6 +256,7 @@ void cotty_workspace_split_move_focus(cotty_workspace_t ws, int64_t direction);
 void cotty_workspace_split_set_ratio(cotty_workspace_t ws, int64_t node_idx, int64_t ratio);
 int64_t cotty_workspace_is_split(cotty_workspace_t ws);
 int64_t cotty_workspace_focused_surface(cotty_workspace_t ws);
+int64_t cotty_workspace_set_focused_surface(cotty_workspace_t ws, int64_t surface_handle);
 
 // Split tree queries
 int64_t cotty_workspace_split_node_count(cotty_workspace_t ws);

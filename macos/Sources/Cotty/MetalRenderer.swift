@@ -251,7 +251,8 @@ class MetalRenderer {
         layer: CAMetalLayer,
         surface: CottySurface,
         cursorVisible: Bool,
-        cursorShape: Int = 0
+        cursorShape: Int = 0,
+        focused: Bool = true
     ) {
         guard let drawable = layer.nextDrawable() else { return }
 
@@ -425,35 +426,79 @@ class MetalRenderer {
         }
 
         // Cursor rendering — shape-aware (block, underline, bar)
+        // Unfocused: hollow rectangle outline (Ghostty style)
         if cursorVisible && cursorRow >= 0 && cursorRow < rows && cursorCol >= 0 && cursorCol < cols {
-            let cursorW: UInt16
-            let cursorH: UInt16
-            let cursorOffY: Int16
-            // cursorShape: 0=default(block), 1=blinking block, 2=steady block,
-            // 3=blinking underline, 4=steady underline, 5=blinking bar, 6=steady bar
-            if cursorShape == 3 || cursorShape == 4 {
-                // Underline: full width, thin height at bottom
-                cursorW = solid.width
-                cursorH = UInt16(max(2, atlas.cellHeight / 8))
-                cursorOffY = Int16(atlas.cellHeight) - Int16(cursorH)
-            } else if cursorShape == 5 || cursorShape == 6 {
-                // Bar: narrow width, full height
-                cursorW = UInt16(max(2, atlas.cellWidth / 8))
-                cursorH = solid.height
-                cursorOffY = 0
+            let cR = Theme.shared.cursorR
+            let cG = Theme.shared.cursorG
+            let cB = Theme.shared.cursorB
+            let cA: UInt8 = 0x80
+
+            if !focused {
+                // Hollow outline: 4 thin rects (top, bottom, left, right edges)
+                let t: UInt16 = max(1, UInt16(atlas.cellHeight / 16))
+                let tw: UInt16 = max(1, UInt16(atlas.cellWidth / 16))
+                // Top edge
+                cells.append(CellData(
+                    gridX: UInt16(cursorCol), gridY: UInt16(cursorRow),
+                    atlasX: solid.atlasX, atlasY: solid.atlasY,
+                    glyphW: solid.width, glyphH: t,
+                    offX: 0, offY: 0,
+                    r: cR, g: cG, b: cB, a: cA
+                ))
+                // Bottom edge
+                cells.append(CellData(
+                    gridX: UInt16(cursorCol), gridY: UInt16(cursorRow),
+                    atlasX: solid.atlasX, atlasY: solid.atlasY,
+                    glyphW: solid.width, glyphH: t,
+                    offX: 0, offY: Int16(atlas.cellHeight) - Int16(t),
+                    r: cR, g: cG, b: cB, a: cA
+                ))
+                // Left edge
+                cells.append(CellData(
+                    gridX: UInt16(cursorCol), gridY: UInt16(cursorRow),
+                    atlasX: solid.atlasX, atlasY: solid.atlasY,
+                    glyphW: tw, glyphH: solid.height,
+                    offX: 0, offY: 0,
+                    r: cR, g: cG, b: cB, a: cA
+                ))
+                // Right edge
+                cells.append(CellData(
+                    gridX: UInt16(cursorCol), gridY: UInt16(cursorRow),
+                    atlasX: solid.atlasX, atlasY: solid.atlasY,
+                    glyphW: tw, glyphH: solid.height,
+                    offX: Int16(solid.width) - Int16(tw), offY: 0,
+                    r: cR, g: cG, b: cB, a: cA
+                ))
             } else {
-                // Block (0, 1, 2): full cell
-                cursorW = solid.width
-                cursorH = solid.height
-                cursorOffY = 0
+                let cursorW: UInt16
+                let cursorH: UInt16
+                let cursorOffY: Int16
+                // cursorShape: 0=default(block), 1=blinking block, 2=steady block,
+                // 3=blinking underline, 4=steady underline, 5=blinking bar, 6=steady bar
+                if cursorShape == 3 || cursorShape == 4 {
+                    // Underline: full width, thin height at bottom
+                    cursorW = solid.width
+                    cursorH = UInt16(max(2, atlas.cellHeight / 8))
+                    cursorOffY = Int16(atlas.cellHeight) - Int16(cursorH)
+                } else if cursorShape == 5 || cursorShape == 6 {
+                    // Bar: narrow width, full height
+                    cursorW = UInt16(max(2, atlas.cellWidth / 8))
+                    cursorH = solid.height
+                    cursorOffY = 0
+                } else {
+                    // Block (0, 1, 2): full cell
+                    cursorW = solid.width
+                    cursorH = solid.height
+                    cursorOffY = 0
+                }
+                cells.append(CellData(
+                    gridX: UInt16(cursorCol), gridY: UInt16(cursorRow),
+                    atlasX: solid.atlasX, atlasY: solid.atlasY,
+                    glyphW: cursorW, glyphH: cursorH,
+                    offX: 0, offY: cursorOffY,
+                    r: cR, g: cG, b: cB, a: cA
+                ))
             }
-            cells.append(CellData(
-                gridX: UInt16(cursorCol), gridY: UInt16(cursorRow),
-                atlasX: solid.atlasX, atlasY: solid.atlasY,
-                glyphW: cursorW, glyphH: cursorH,
-                offX: 0, offY: cursorOffY,
-                r: Theme.shared.cursorR, g: Theme.shared.cursorG, b: Theme.shared.cursorB, a: 0x80
-            ))
         }
 
         let proj = simd_float4x4(

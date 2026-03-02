@@ -126,6 +126,10 @@ final class CottyWorkspace {
         cotty_workspace_focused_surface(handle)
     }
 
+    func setFocusedSurface(_ surfaceHandle: cotty_surface_t) {
+        cotty_workspace_set_focused_surface(handle, surfaceHandle)
+    }
+
     // Split tree queries
     var splitNodeCount: Int { Int(cotty_workspace_split_node_count(handle)) }
     func splitNodeIsLeaf(_ idx: Int) -> Bool { cotty_workspace_split_node_is_leaf(handle, Int64(idx)) != 0 }

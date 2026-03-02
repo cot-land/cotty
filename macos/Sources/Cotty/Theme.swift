@@ -43,6 +43,9 @@ class Theme {
     // Option-as-alt: true = ESC prefix, false = macOS composed characters
     var optionAsAlt: Bool = true
 
+    // Unfocused split dimming (0.0 = fully dimmed, 1.0 = no dimming)
+    var unfocusedSplitOpacity: Double = 0.75
+
     /// Load theme values from Cot config via FFI.
     /// Must be called after cotty_app_new().
     func load() {

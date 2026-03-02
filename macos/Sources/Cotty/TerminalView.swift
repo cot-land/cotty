@@ -32,6 +32,15 @@ class TerminalView: NSView {
     private let sizerView = TerminalSizerView()
     private var ignoreScrollUpdate = false
 
+    // Unfocused split dimming overlay (Ghostty style)
+    private let unfocusedOverlay = UnfocusedOverlayView()
+
+    // Suppress rendering during layout transitions (split rebuild)
+    var suppressRender = false
+
+    // Focus state — drives cursor shape (hollow outline when unfocused)
+    private var isFocused = true
+
     // Cursor blink — sets dirty flag instead of rendering directly
     private var cursorVisible = true
     private var blinkTimer: Timer?
@@ -83,6 +92,13 @@ class TerminalView: NSView {
 
         addSubview(scrollView)
 
+        // Unfocused dimming overlay — NSView on top of all content, passes clicks through
+        unfocusedOverlay.wantsLayer = true
+        unfocusedOverlay.frame = bounds
+        unfocusedOverlay.autoresizingMask = [.width, .height]
+        unfocusedOverlay.isHidden = true
+        addSubview(unfocusedOverlay)
+
         // Observe scroll position changes from the clip view
         clipView.postsBoundsChangedNotifications = true
         NotificationCenter.default.addObserver(
@@ -101,7 +117,7 @@ class TerminalView: NSView {
         resizeTerminalGrid(bounds.size)
         startNotifyMonitor()
         startDisplayLink()
-        startBlinkTimer()
+        if isFocused { startBlinkTimer() }
         renderFrame()
     }
 
@@ -117,6 +133,7 @@ class TerminalView: NSView {
 
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
+        guard !suppressRender else { return }
         resizeTerminalGrid(newSize)
         updateDrawableSize()
         renderFrame()
@@ -216,7 +233,8 @@ class TerminalView: NSView {
             layer: metalView.metalLayer,
             surface: surface,
             cursorVisible: effectiveCursorVisible,
-            cursorShape: shape
+            cursorShape: shape,
+            focused: isFocused
         )
 
         // Read bell state
@@ -346,6 +364,7 @@ class TerminalView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
         let pos = gridPosition(from: event)
         surface.lockTerminal()
         if surface.mouseTrackingMode != 0 {
@@ -516,18 +535,53 @@ class TerminalView: NSView {
             return
         }
 
-        // Let Cmd+key combos through to the menu responder chain
+        // Natural text editing keybinds (matches Ghostty Config.zig:6967-6996)
+        // Forces legacy encoding for macOS-standard text navigation shortcuts
         if event.modifierFlags.contains(.command) {
-            super.keyDown(with: event)
-            return
+            let kc = event.keyCode
+            if kc == 123 || kc == 124 {
+                // Cmd+Left → Ctrl-A (0x01), Cmd+Right → Ctrl-E (0x05)
+                let key: Int64 = kc == 123 ? 97 : 101  // 'a' or 'e'
+                surface.lockTerminal()
+                if surface.selectionActive { surface.selectionClear() }
+                surface.terminalKeyEvent(key, mods: 1, eventType: 0)  // MOD_CTRL
+                surface.unlockTerminal()
+                resetCursorBlink()
+                return
+            } else if kc == 51 {
+                // Cmd+Backspace → Ctrl-U (0x15, kill line)
+                surface.lockTerminal()
+                if surface.selectionActive { surface.selectionClear() }
+                surface.terminalKeyEvent(117, mods: 1, eventType: 0)  // 'u' + MOD_CTRL
+                surface.unlockTerminal()
+                resetCursorBlink()
+                return
+            } else {
+                // All other Cmd+key combos → menu responder chain
+                super.keyDown(with: event)
+                return
+            }
         }
 
-        // Option-as-alt: when disabled, let macOS produce composed characters (é, ñ, etc.)
-        // Ghostty ref: SurfaceView_AppKit.swift — option_as_alt config
-        if event.modifierFlags.contains(.option) && !Theme.shared.optionAsAlt
-            && !event.modifierFlags.contains(.control) {
-            interpretKeyEvents([event])
-            return
+        // Option+Arrow → word navigation (matches Ghostty Config.zig:6987-6996)
+        // Option+Left sends ESC b (backward word), Option+Right sends ESC f (forward word)
+        // Other Option keys: when optionAsAlt is off, let macOS produce composed characters
+        if event.modifierFlags.contains(.option) && !event.modifierFlags.contains(.control) {
+            let kc = event.keyCode
+            if kc == 123 || kc == 124 {
+                // Option+Left → ESC b, Option+Right → ESC f
+                let key: Int64 = kc == 123 ? 98 : 102  // 'b' or 'f'
+                surface.lockTerminal()
+                if surface.selectionActive { surface.selectionClear() }
+                surface.terminalKeyEvent(key, mods: 2, eventType: 0)  // MOD_ALT
+                surface.unlockTerminal()
+                resetCursorBlink()
+                return
+            }
+            if !Theme.shared.optionAsAlt {
+                interpretKeyEvents([event])
+                return
+            }
         }
 
         // Clear selection when typing
@@ -595,6 +649,9 @@ class TerminalView: NSView {
     override func becomeFirstResponder() -> Bool {
         let result = super.becomeFirstResponder()
         if result {
+            // Sync Cot workspace focus to match Swift first responder
+            workspaceController?.workspace.setFocusedSurface(surface.handle)
+
             surface.lockTerminal()
             let focusMode = surface.focusEventMode
             surface.unlockTerminal()
@@ -603,7 +660,9 @@ class TerminalView: NSView {
                     surface.terminalWrite(data)
                 }
             }
-            updateFocusBorder(focused: true)
+            isFocused = true
+            updateFocusAppearance(focused: true)
+            startBlinkTimer()
         }
         return result
     }
@@ -619,19 +678,23 @@ class TerminalView: NSView {
                     surface.terminalWrite(data)
                 }
             }
-            updateFocusBorder(focused: false)
+            isFocused = false
+            updateFocusAppearance(focused: false)
+            blinkTimer?.invalidate()
+            blinkTimer = nil
+            cursorVisible = true
+            cursorDirty = true
         }
         return result
     }
 
-    private func updateFocusBorder(focused: Bool) {
-        wantsLayer = true
-        if focused {
-            layer?.borderWidth = 1
-            layer?.borderColor = NSColor(red: 0.3, green: 0.5, blue: 1.0, alpha: 0.6).cgColor
+    private func updateFocusAppearance(focused: Bool) {
+        let isSplit = workspaceController?.workspace.isSplit ?? false
+        if !focused && isSplit {
+            unfocusedOverlay.alphaValue = CGFloat(1.0 - Theme.shared.unfocusedSplitOpacity)
+            unfocusedOverlay.isHidden = false
         } else {
-            layer?.borderWidth = 0
-            layer?.borderColor = nil
+            unfocusedOverlay.isHidden = true
         }
     }
 
@@ -653,6 +716,18 @@ class TerminalView: NSView {
 }
 
 // MARK: - Helper Views
+
+/// Semi-transparent overlay for dimming unfocused split panes.
+/// Returns nil from hitTest so clicks pass through to the terminal.
+/// Uses wantsUpdateLayer so AppKit applies backgroundColor correctly on layer-backed views.
+private class UnfocusedOverlayView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override var wantsUpdateLayer: Bool { true }
+    override func updateLayer() {
+        let t = Theme.shared
+        layer?.backgroundColor = CGColor(red: t.bgR, green: t.bgG, blue: t.bgB, alpha: 1.0)
+    }
+}
 
 /// Transparent document view that provides content height for the scrollbar.
 /// Forwards mouse events through to the terminal view.

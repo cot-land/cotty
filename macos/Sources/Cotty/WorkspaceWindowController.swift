@@ -327,8 +327,22 @@ class WorkspaceWindowController: NSWindowController, NSWindowDelegate, FileTreeD
         selectTab(at: workspace.selectedIndex)
     }
 
-    /// Close a terminal tab when its child process exits.
+    /// Close a terminal tab/pane when its child process exits.
+    /// If the view is a split pane, closes just that pane. Otherwise closes the tab.
     func closeTerminalView(_ view: TerminalView) {
+        // Check if this view is in a split (its handle won't match the tab root)
+        if workspace.isSplit, tabIndex(for: view) == nil {
+            // The exiting pane should be focused (user typed 'exit' in it).
+            // closeSplit closes the currently focused pane in Cot.
+            let closedHandle = workspace.closeSplit()
+            if closedHandle > 0 {
+                viewsBySurface[closedHandle]?.removeFromSuperview()
+                viewsBySurface.removeValue(forKey: closedHandle)
+                surfacesBySurface.removeValue(forKey: closedHandle)
+                rebuildSplitLayout()
+                return
+            }
+        }
         guard let index = tabIndex(for: view) else { return }
         closeTab(at: index)
     }
@@ -797,9 +811,12 @@ class WorkspaceWindowController: NSWindowController, NSWindowDelegate, FileTreeD
             return
         }
 
-        // Hide all views first
+        // Hide all views and suppress rendering during layout rebuild.
+        // Views stay hidden until rendered at their final size to prevent
+        // the Metal layer stretching old content into the new frame.
         for (_, view) in viewsBySurface {
             view.isHidden = true
+            (view as? TerminalView)?.suppressRender = true
         }
 
         // Build split container
@@ -811,16 +828,25 @@ class WorkspaceWindowController: NSWindowController, NSWindowDelegate, FileTreeD
         }
         contentContainer.addSubview(container)
 
+        // Add views to split (still hidden) — NSSplitView sets their frames
         container.rebuild(workspace: workspace) { [weak self] handle in
             guard let self else { return nil }
             let view = self.viewsBySurface[handle]
-            view?.isHidden = false
             if let tv = view as? TerminalView {
                 tv.removeFromSuperview()
             } else {
                 view?.removeFromSuperview()
             }
             return view
+        }
+
+        // Now render each view at its final size, then unhide
+        for (_, view) in viewsBySurface {
+            if let tv = view as? TerminalView, tv.superview != nil {
+                tv.suppressRender = false
+                tv.setFrameSize(tv.frame.size)
+                tv.isHidden = false
+            }
         }
 
         // Focus the active split's terminal
