@@ -392,6 +392,11 @@ class TerminalView: NSView {
             surface.unlockTerminal()
             return
         }
+        // Copy-on-select: automatically copy selection to clipboard
+        if surface.selectionActive, let text = surface.selectedText {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+        }
         surface.unlockTerminal()
     }
 

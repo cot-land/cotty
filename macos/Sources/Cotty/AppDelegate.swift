@@ -141,6 +141,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let paletteItem = NSMenuItem(title: "Command Palette", action: #selector(WorkspaceWindowController.toggleCommandPalette(_:)), keyEquivalent: "P")
         paletteItem.keyEquivalentModifierMask = [.command, .shift]
         viewMenu.addItem(paletteItem)
+        let themeItem = NSMenuItem(title: "Theme Selector", action: #selector(WorkspaceWindowController.showThemeSelector(_:)), keyEquivalent: "T")
+        themeItem.keyEquivalentModifierMask = [.command, .shift]
+        viewMenu.addItem(themeItem)
         viewMenu.addItem(.separator())
         viewMenu.addItem(withTitle: "Increase Font Size", action: #selector(WorkspaceWindowController.increaseFontSize(_:)), keyEquivalent: "=")
         viewMenu.addItem(withTitle: "Decrease Font Size", action: #selector(WorkspaceWindowController.decreaseFontSize(_:)), keyEquivalent: "-")
