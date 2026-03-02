@@ -20,18 +20,22 @@ class TerminalView: NSView {
     private(set) var renderer: MetalRenderer!
     private let metalView: MetalLayerView
 
-    // Notification pipe — IO thread signals when new content is available
+    // Notification pipe — IO thread signals for non-render events (title, bell, child exit)
     private var notifySource: DispatchSourceRead?
     private let notifyBuffer = UnsafeMutablePointer<UInt8>.allocate(capacity: 1024)
+
+    // VSync-driven rendering via CVDisplayLink
+    private var displayLink: CVDisplayLink?
 
     // Scrollbar — transparent NSScrollView overlay (same pattern as EditorView)
     private let scrollView = TrackingScrollView()
     private let sizerView = TerminalSizerView()
     private var ignoreScrollUpdate = false
 
-    // Cursor blink
+    // Cursor blink — sets dirty flag instead of rendering directly
     private var cursorVisible = true
     private var blinkTimer: Timer?
+    private var cursorDirty = false
 
     // MARK: - NSView Setup
 
@@ -49,6 +53,7 @@ class TerminalView: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     deinit {
+        if let dl = displayLink { CVDisplayLinkStop(dl) }
         notifySource?.cancel()
         notifyBuffer.deallocate()
         blinkTimer?.invalidate()
@@ -95,6 +100,7 @@ class TerminalView: NSView {
         updateDrawableSize()
         resizeTerminalGrid(bounds.size)
         startNotifyMonitor()
+        startDisplayLink()
         startBlinkTimer()
         renderFrame()
     }
@@ -140,8 +146,8 @@ class TerminalView: NSView {
     // MARK: - Notification Pipe Monitoring
 
     /// Monitor the notification pipe from the IO reader thread.
-    /// When the IO thread finishes a VT parse batch, it writes to the pipe.
-    /// We drain the pipe and re-render under lock.
+    /// The pipe is drained here but rendering is driven by VSync (CVDisplayLink).
+    /// This handler processes non-render signals: title, bell, child exit.
     private func startNotifyMonitor() {
         let fd = surface.notifyFd
         guard fd >= 0 else { return }
@@ -151,13 +157,44 @@ class TerminalView: NSView {
         let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: .main)
         source.setEventHandler { [weak self] in
             guard let self else { return }
-            // Drain the pipe (just a signal, content doesn't matter)
+            // Drain the pipe (rendering is handled by VSync display link)
             while Darwin.read(fd, self.notifyBuffer, 1024) > 0 {}
-            self.renderFrame()
         }
         source.setCancelHandler { /* pipe closed by cotty_terminal_surface_free */ }
         source.resume()
         notifySource = source
+    }
+
+    // MARK: - VSync Display Link
+
+    /// Start a CVDisplayLink that fires on each VSync. The callback checks
+    /// the atomic dirty flag and renders only when new content is available.
+    private func startDisplayLink() {
+        guard displayLink == nil else { return }
+        var dl: CVDisplayLink?
+        CVDisplayLinkCreateWithActiveCGDisplays(&dl)
+        guard let dl else { return }
+
+        // CVDisplayLink callback fires on a background thread — dispatch to main
+        let callback: CVDisplayLinkOutputCallback = { _, _, _, _, _, userInfo in
+            guard let userInfo else { return kCVReturnSuccess }
+            let view = Unmanaged<TerminalView>.fromOpaque(userInfo).takeUnretainedValue()
+            // Check the atomic dirty flag without locking (lock-free read+clear)
+            let dirty = view.surface.renderDirty || view.cursorDirty
+            if dirty {
+                DispatchQueue.main.async { [weak view] in
+                    guard let view else { return }
+                    view.cursorDirty = false
+                    view.renderFrame()
+                }
+            }
+            return kCVReturnSuccess
+        }
+
+        let userInfo = Unmanaged.passUnretained(self).toOpaque()
+        CVDisplayLinkSetOutputCallback(dl, callback, userInfo)
+        CVDisplayLinkStart(dl)
+        displayLink = dl
     }
 
     // MARK: - Rendering
@@ -561,7 +598,7 @@ class TerminalView: NSView {
         blinkTimer = Timer.scheduledTimer(withTimeInterval: Theme.shared.blinkInterval, repeats: true) { [weak self] _ in
             guard let self else { return }
             self.cursorVisible.toggle()
-            self.renderFrame()
+            self.cursorDirty = true  // VSync callback will pick this up
         }
     }
 

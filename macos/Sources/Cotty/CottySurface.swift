@@ -121,6 +121,10 @@ final class CottySurface {
     func unlockTerminal() { cotty_terminal_unlock(handle) }
     var notifyFd: Int32 { Int32(cotty_terminal_notify_fd(handle)) }
 
+    /// Atomically check and clear the render dirty flag.
+    /// Returns true if the IO thread produced new content since last check.
+    var renderDirty: Bool { cotty_terminal_check_dirty(handle) != 0 }
+
     // MARK: - Terminal I/O
 
     var ptyFd: Int32 { Int32(cotty_terminal_pty_fd(handle)) }
@@ -145,10 +149,18 @@ final class CottySurface {
     }
 
     /// Raw pointer to the contiguous cell buffer.
-    /// Each cell = 11 x Int64 (codepoint, fg_r, fg_g, fg_b, bg_r, bg_g, bg_b, flags, ul_r, ul_g, ul_b).
-    /// Stride = 88 bytes. Total cells = terminalRows * terminalCols.
+    /// Each cell = 8 x Int64 (codepoint, fg_type, fg_val, bg_type, bg_val, flags, ul_type, ul_val).
+    /// Stride = 64 bytes. Total cells = terminalRows * terminalCols.
+    /// Color types: 0=none (use default), 1=palette (val=index), 2=rgb (val=packed).
     var terminalCellsPtr: UnsafeRawPointer? {
         let ptr = cotty_terminal_cells_ptr(handle)
+        guard ptr != 0 else { return nil }
+        return UnsafeRawPointer(bitPattern: Int(ptr))
+    }
+
+    /// Raw pointer to the terminal's 256-color palette (768 i64 values = 256 × 3 RGB).
+    var terminalPalettePtr: UnsafeRawPointer? {
+        let ptr = cotty_terminal_palette_ptr(handle)
         guard ptr != 0 else { return nil }
         return UnsafeRawPointer(bitPattern: Int(ptr))
     }

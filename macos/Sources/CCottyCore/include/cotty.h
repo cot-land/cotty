@@ -63,6 +63,7 @@ void cotty_terminal_surface_free(cotty_surface_t surface);
 void cotty_terminal_lock(cotty_surface_t surface);
 void cotty_terminal_unlock(cotty_surface_t surface);
 int64_t cotty_terminal_notify_fd(cotty_surface_t surface);
+int64_t cotty_terminal_check_dirty(cotty_surface_t surface);
 
 // Terminal input
 void cotty_terminal_key(cotty_surface_t surface, int64_t key, int64_t mods);
@@ -94,7 +95,10 @@ int64_t cotty_terminal_pty_fd(cotty_surface_t surface);
 int64_t cotty_terminal_child_pid(cotty_surface_t surface);
 
 // Raw grid buffer access (avoids per-cell FFI overhead)
+// Cell layout: 8 x i64 (codepoint, fg_type, fg_val, bg_type, bg_val, flags, ul_type, ul_val)
+// Stride = 64 bytes. Color types: 0=none, 1=palette, 2=rgb
 int64_t cotty_terminal_cells_ptr(cotty_surface_t surface);
+int64_t cotty_terminal_palette_ptr(cotty_surface_t surface);
 
 // Terminal scrollback queries
 int64_t cotty_terminal_scrollback_rows(cotty_surface_t surface);
@@ -198,6 +202,19 @@ int64_t cotty_palette_result_tag(int64_t index);
 int64_t cotty_palette_selected(void);
 void cotty_palette_move_up(void);
 void cotty_palette_move_down(void);
+
+// Theme Palette
+void cotty_theme_toggle(void);
+int64_t cotty_theme_active(void);
+void cotty_theme_dismiss(void);
+void cotty_theme_set_query(const uint8_t *ptr, int64_t len);
+int64_t cotty_theme_result_count(void);
+int64_t cotty_theme_result_title(int64_t index);
+int64_t cotty_theme_result_title_len(int64_t index);
+int64_t cotty_theme_selected(void);
+void cotty_theme_move_up(void);
+void cotty_theme_move_down(void);
+void cotty_theme_apply(int64_t index);
 
 // Workspace
 typedef int64_t cotty_workspace_t;
