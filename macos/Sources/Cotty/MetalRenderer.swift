@@ -334,17 +334,21 @@ class MetalRenderer {
                     ))
                 }
 
-                let isHidden = flags & 256 != 0  // CELL_HIDDEN
+                let isHidden = flags & 256 != 0   // CELL_HIDDEN
+                let isWide = flags & 8192 != 0     // CELL_WIDE
+                let isSpacer = flags & 16384 != 0  // CELL_SPACER
 
-                // Foreground glyph (skip if hidden)
-                if codepoint >= 32 && !isHidden {
+                // Foreground glyph (skip if hidden or spacer)
+                if codepoint >= 32 && !isHidden && !isSpacer {
                     let isBold = flags & 1 != 0
                     let isItalic = flags & 32 != 0
                     let g = atlas.lookupStyled(UInt32(codepoint), bold: isBold, italic: isItalic)
+                    // Wide chars render at 2x cell width
+                    let glyphW = isWide ? UInt16(atlas.cellWidth * 2) : g.width
                     cells.append(CellData(
                         gridX: UInt16(col), gridY: UInt16(row),
                         atlasX: g.atlasX, atlasY: g.atlasY,
-                        glyphW: g.width, glyphH: g.height,
+                        glyphW: glyphW, glyphH: g.height,
                         offX: 0, offY: 0,
                         r: fgR, g: fgG, b: fgB, a: fgAlpha
                     ))
