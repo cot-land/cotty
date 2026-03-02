@@ -19,6 +19,9 @@ class GlyphAtlas {
     private(set) var texture: MTLTexture
     let device: MTLDevice
     let font: CTFont
+    let boldFont: CTFont
+    let italicFont: CTFont
+    let boldItalicFont: CTFont
     let cellWidth: Int
     let cellHeight: Int
     private(set) var atlasWidth: Int
@@ -26,6 +29,9 @@ class GlyphAtlas {
     let ascent: CGFloat
     let descent: CGFloat
 
+    // Cache key encodes style in bits 30-31: bit30=bold, bit31=italic
+    private static let boldBit: UInt32 = 1 << 30
+    private static let italicBit: UInt32 = 1 << 31
     private var glyphs: [UInt32: GlyphInfo] = [:]
     private static let cols = 32
     private var nextSlot: Int = 96
@@ -35,9 +41,20 @@ class GlyphAtlas {
         GlyphInfo(atlasX: 0, atlasY: 0, width: UInt16(cellWidth), height: UInt16(cellHeight))
     }
 
+    /// Create a font variant with the given symbolic traits, falling back to the base font.
+    private static func createVariant(_ base: CTFont, traits: CTFontSymbolicTraits) -> CTFont {
+        if let variant = CTFontCreateCopyWithSymbolicTraits(base, 0, nil, traits, traits) {
+            return variant
+        }
+        return base
+    }
+
     init(device: MTLDevice, font: CTFont) {
         self.device = device
         self.font = font
+        self.boldFont = Self.createVariant(font, traits: .boldTrait)
+        self.italicFont = Self.createVariant(font, traits: .italicTrait)
+        self.boldItalicFont = Self.createVariant(font, traits: [.boldTrait, .italicTrait])
         ascent = ceil(CTFontGetAscent(font))
         descent = ceil(CTFontGetDescent(font))
         let leading = ceil(CTFontGetLeading(font))
@@ -119,25 +136,41 @@ class GlyphAtlas {
     func lookup(_ codepoint: UInt32) -> GlyphInfo {
         if let info = glyphs[codepoint] { return info }
         if codepoint < 32 { return solidInfo }
-        return renderAndCache(codepoint)
+        return renderAndCache(codepoint, font: font)
     }
 
-    private func renderAndCache(_ codepoint: UInt32) -> GlyphInfo {
-        guard nextSlot < totalSlots else { return solidInfo }
+    /// Look up a styled glyph (bold, italic, or bold+italic).
+    func lookupStyled(_ codepoint: UInt32, bold: Bool, italic: Bool) -> GlyphInfo {
+        if !bold && !italic { return lookup(codepoint) }
+        if codepoint < 32 { return solidInfo }
+        var key = codepoint
+        if bold { key |= Self.boldBit }
+        if italic { key |= Self.italicBit }
+        if let info = glyphs[key] { return info }
+        let styledFont: CTFont
+        if bold && italic { styledFont = boldItalicFont }
+        else if bold { styledFont = boldFont }
+        else { styledFont = italicFont }
+        return renderAndCache(key, font: styledFont)
+    }
 
-        // Try primary font first, then fall back to system font for the codepoint
-        var bitmap = Self.renderGlyphBitmap(font: font, codepoint: codepoint,
+    private func renderAndCache(_ key: UInt32, font renderFont: CTFont) -> GlyphInfo {
+        guard nextSlot < totalSlots else { return solidInfo }
+        let codepoint = key & 0x3FFF_FFFF  // Mask off style bits
+
+        // Try primary styled font first, then fall back to system font for the codepoint
+        var bitmap = Self.renderGlyphBitmap(font: renderFont, codepoint: codepoint,
                                             cellWidth: cellWidth, cellHeight: cellHeight,
                                             descent: descent)
         if bitmap == nil {
-            if let fallback = Self.fallbackFont(for: codepoint, primaryFont: font) {
+            if let fallback = Self.fallbackFont(for: codepoint, primaryFont: renderFont) {
                 bitmap = Self.renderGlyphBitmap(font: fallback, codepoint: codepoint,
                                                 cellWidth: cellWidth, cellHeight: cellHeight,
                                                 descent: descent)
             }
         }
         guard let bitmap else {
-            glyphs[codepoint] = solidInfo
+            glyphs[key] = solidInfo
             return solidInfo
         }
 
@@ -166,7 +199,7 @@ class GlyphAtlas {
             width: UInt16(cellWidth),
             height: UInt16(cellHeight)
         )
-        glyphs[codepoint] = info
+        glyphs[key] = info
         return info
     }
 

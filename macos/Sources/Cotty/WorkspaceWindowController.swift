@@ -128,6 +128,9 @@ class WorkspaceWindowController: NSWindowController, NSWindowDelegate, FileTreeD
         )
         window.minSize = NSSize(width: 400, height: 300)
         window.backgroundColor = Theme.shared.background
+        if Theme.shared.bgOpacity < 1.0 {
+            window.isOpaque = false
+        }
         window.isReleasedWhenClosed = false
         window.tabbingMode = .disallowed
         window.titlebarAppearsTransparent = true

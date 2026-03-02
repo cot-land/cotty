@@ -216,7 +216,7 @@ class MetalRenderer {
         passDesc.colorAttachments[0].loadAction = .clear
         passDesc.colorAttachments[0].storeAction = .store
         passDesc.colorAttachments[0].clearColor = MTLClearColor(
-            red: Theme.shared.bgR, green: Theme.shared.bgG, blue: Theme.shared.bgB, alpha: 1.0
+            red: Theme.shared.bgR, green: Theme.shared.bgG, blue: Theme.shared.bgB, alpha: Theme.shared.bgOpacity
         )
 
         let cmdBuf = commandQueue.makeCommandBuffer()!
@@ -338,7 +338,9 @@ class MetalRenderer {
 
                 // Foreground glyph (skip if hidden)
                 if codepoint >= 32 && !isHidden {
-                    let g = atlas.lookup(UInt32(codepoint))
+                    let isBold = flags & 1 != 0
+                    let isItalic = flags & 32 != 0
+                    let g = atlas.lookupStyled(UInt32(codepoint), bold: isBold, italic: isItalic)
                     cells.append(CellData(
                         gridX: UInt16(col), gridY: UInt16(row),
                         atlasX: g.atlasX, atlasY: g.atlasY,
@@ -468,7 +470,7 @@ class MetalRenderer {
         passDesc.colorAttachments[0].loadAction = .clear
         passDesc.colorAttachments[0].storeAction = .store
         passDesc.colorAttachments[0].clearColor = MTLClearColor(
-            red: Theme.shared.bgR, green: Theme.shared.bgG, blue: Theme.shared.bgB, alpha: 1.0
+            red: Theme.shared.bgR, green: Theme.shared.bgG, blue: Theme.shared.bgB, alpha: Theme.shared.bgOpacity
         )
 
         let cmdBuf = commandQueue.makeCommandBuffer()!

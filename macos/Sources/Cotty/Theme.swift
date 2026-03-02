@@ -37,6 +37,9 @@ class Theme {
     var paddingPoints: CGFloat = 8
     let blinkInterval: TimeInterval = 0.5
 
+    // Background opacity (0.0-1.0)
+    var bgOpacity: Double = 1.0
+
     /// Load theme values from Cot config via FFI.
     /// Must be called after cotty_app_new().
     func load() {
@@ -76,7 +79,8 @@ class Theme {
         bgR = Double(bgRi) / 255.0
         bgG = Double(bgGi) / 255.0
         bgB = Double(bgBi) / 255.0
-        background = NSColor(red: bgR, green: bgG, blue: bgB, alpha: 1)
+        bgOpacity = Double(cotty_config_bg_opacity()) / 100.0
+        background = NSColor(red: bgR, green: bgG, blue: bgB, alpha: bgOpacity)
 
         // Foreground
         fgR = UInt8(clamping: cotty_config_fg_r())

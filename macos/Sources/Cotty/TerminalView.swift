@@ -668,6 +668,9 @@ private class MetalLayerView: NSView {
         layer.device = device
         layer.pixelFormat = .bgra8Unorm
         layer.framebufferOnly = true
+        if Theme.shared.bgOpacity < 1.0 {
+            layer.isOpaque = false
+        }
         return layer
     }
 
