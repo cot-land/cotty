@@ -405,6 +405,10 @@ final class CottySurface {
         cotty_inspector_rebuild_terminal_state(handle)
     }
 
+    func inspectorRebuildEditorState() {
+        cotty_inspector_rebuild_editor_state(handle)
+    }
+
     // MARK: - Editor Grid
 
     var editorRows: Int { Int(cotty_editor_rows(handle)) }
@@ -461,6 +465,14 @@ final class CottySurface {
 
     func editorClick(row: Int, col: Int) {
         cotty_editor_click(handle, Int64(row), Int64(col))
+    }
+
+    func editorSelectWord(row: Int, col: Int) {
+        cotty_editor_select_word(handle, Int64(row), Int64(col))
+    }
+
+    func editorSelectLine(row: Int) {
+        cotty_editor_select_line(handle, Int64(row))
     }
 
     func editorDrag(row: Int, col: Int) {

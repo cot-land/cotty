@@ -332,7 +332,14 @@ class EditorView: NSView {
             // Cmd+Click — add cursor at click position
             surface.editorAddCursor(row: row, col: col)
         } else {
-            surface.editorClick(row: row, col: col)
+            switch event.clickCount {
+            case 2:
+                surface.editorSelectWord(row: row, col: col)
+            case 3:
+                surface.editorSelectLine(row: row)
+            default:
+                surface.editorClick(row: row, col: col)
+            }
         }
         resetCursorBlink()
         renderFrame()

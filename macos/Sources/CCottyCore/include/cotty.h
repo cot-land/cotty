@@ -86,6 +86,8 @@ int64_t cotty_editor_cursor_col(cotty_surface_t surface);
 
 // Editor mouse
 void cotty_editor_click(cotty_surface_t surface, int64_t row, int64_t col);
+void cotty_editor_select_word(cotty_surface_t surface, int64_t row, int64_t col);
+void cotty_editor_select_line(cotty_surface_t surface, int64_t row);
 void cotty_editor_drag(cotty_surface_t surface, int64_t row, int64_t col);
 
 // Editor yank buffer
