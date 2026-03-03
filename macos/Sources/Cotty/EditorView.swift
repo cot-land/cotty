@@ -241,11 +241,15 @@ class EditorView: NSView {
                 renderFrame()
                 return
             default:
-                break
+                // Cmd+Arrow/Backspace — forward to Cot (line/doc movement)
+                let keyCode = event.keyCode
+                if keyCode == 123 || keyCode == 124 || keyCode == 125 || keyCode == 126 || keyCode == 51 {
+                    break  // fall through to translateKeyEvent path below
+                }
+                // Let the system handle other Cmd+key combos via menu responder chain
+                super.keyDown(with: event)
+                return
             }
-            // Let the system handle other Cmd+key combos via menu responder chain
-            super.keyDown(with: event)
-            return
         }
 
         let (key, mods) = CottySurface.translateKeyEvent(event)
