@@ -55,6 +55,15 @@ void cotty_surface_set_clean(cotty_surface_t surface);
 
 int64_t cotty_surface_kind(cotty_surface_t surface);
 
+// Surface mode and viewport
+#define COTTY_MODE_NORMAL   0
+#define COTTY_MODE_INSERT   1
+#define COTTY_MODE_SELECT   2
+
+int64_t cotty_surface_mode(cotty_surface_t surface);
+void cotty_surface_set_viewport(cotty_surface_t surface, int64_t rows, int64_t cols);
+int64_t cotty_surface_scroll_offset(cotty_surface_t surface);
+
 // Terminal surface lifecycle
 cotty_surface_t cotty_terminal_surface_new(cotty_app_t app, int64_t rows, int64_t cols);
 void cotty_terminal_surface_free(cotty_surface_t surface);
