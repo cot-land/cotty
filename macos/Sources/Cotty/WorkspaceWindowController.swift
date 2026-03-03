@@ -5,7 +5,7 @@ import CoreText
 /// Single-window workspace controller. Manages a custom tab bar, sidebar,
 /// and multiple tabs. All tab logic (ordering, selection, preview/pin) lives
 /// in Cot via CottyWorkspace. Swift only manages views and platform I/O.
-class WorkspaceWindowController: NSWindowController, NSWindowDelegate, FileTreeDelegate, TabBarDelegate {
+class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NSSplitViewDelegate, FileTreeDelegate, TabBarDelegate {
     let workspace: CottyWorkspace
 
     // View dictionaries keyed by surface handle
@@ -21,6 +21,7 @@ class WorkspaceWindowController: NSWindowController, NSWindowDelegate, FileTreeD
     private var sidebarContainer: NSView!
     private var fileTreeView: FileTreeView!
     private var contentContainer: NSView!
+    private var statusBarView: StatusBarView!
 
     // Inspector (shown for current terminal tab)
     private var inspectorView: InspectorView?
@@ -175,10 +176,16 @@ class WorkspaceWindowController: NSWindowController, NSWindowDelegate, FileTreeD
         splitView = NSSplitView()
         splitView.isVertical = true
         splitView.dividerStyle = .thin
+        splitView.delegate = self
         splitView.addArrangedSubview(sidebarContainer)
         splitView.addArrangedSubview(contentContainer)
         splitView.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(splitView)
+
+        // Status bar
+        statusBarView = StatusBarView(frame: .zero)
+        statusBarView.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(statusBarView)
 
         NSLayoutConstraint.activate([
             tabBarView.topAnchor.constraint(equalTo: container.topAnchor),
@@ -189,7 +196,12 @@ class WorkspaceWindowController: NSWindowController, NSWindowDelegate, FileTreeD
             splitView.topAnchor.constraint(equalTo: tabBarView.bottomAnchor),
             splitView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             splitView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            splitView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            splitView.bottomAnchor.constraint(equalTo: statusBarView.topAnchor),
+
+            statusBarView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            statusBarView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            statusBarView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            statusBarView.heightAnchor.constraint(equalToConstant: StatusBarView.barHeight),
         ])
 
         // Set sidebar position after layout settles
@@ -284,6 +296,7 @@ class WorkspaceWindowController: NSWindowController, NSWindowDelegate, FileTreeD
         // Update chrome
         window?.title = tabDisplayTitle(at: index)
         reloadTabBar()
+        updateStatusBar()
     }
 
     /// Close the active pane. If in a split, closes just the focused pane.
@@ -362,7 +375,7 @@ class WorkspaceWindowController: NSWindowController, NSWindowDelegate, FileTreeD
         let windowSize = window?.contentView?.bounds.size ?? NSSize(width: 1000, height: 600)
         let sidebarW: CGFloat = workspace.sidebarVisible ? CGFloat(workspace.sidebarWidth) + 1 : 0
         let contentW = windowSize.width - sidebarW
-        let contentH = windowSize.height - TabBarView.barHeight
+        let contentH = windowSize.height - TabBarView.barHeight - StatusBarView.barHeight
         return Self.terminalGridSize(contentWidth: contentW, contentHeight: contentH)
     }
 
@@ -422,6 +435,22 @@ class WorkspaceWindowController: NSWindowController, NSWindowDelegate, FileTreeD
         let title = tabDisplayTitle(at: idx)
         window?.title = title
         reloadTabBar()
+    }
+
+    /// Update the status bar from the current tab's state.
+    func updateStatusBar() {
+        let idx = workspace.selectedIndex
+        guard idx >= 0 else { return }
+        let isTerminal = workspace.tabIsTerminal(at: idx)
+        let handle = workspace.tabSurface(at: idx)
+        guard let surface = surfacesBySurface[handle] else { return }
+        let mode = Int(cotty_surface_mode(handle))
+        statusBarView.update(
+            mode: mode,
+            cursorLine: surface.cursorLine,
+            cursorCol: surface.cursorCol,
+            isTerminal: isTerminal
+        )
     }
 
     // MARK: - Inspector Toggle (terminal only)
@@ -602,14 +631,14 @@ class WorkspaceWindowController: NSWindowController, NSWindowDelegate, FileTreeD
     }
 
     @objc func toggleSidebar(_ sender: Any) {
-        if workspace.sidebarVisible {
-            sidebarContainer.isHidden = true
-            workspace.sidebarVisible = false
-        } else {
-            sidebarContainer.isHidden = false
-            splitView.setPosition(CGFloat(workspace.sidebarWidth), ofDividerAt: 0)
-            workspace.sidebarVisible = true
-        }
+        _ = workspace.toggleSidebar()
+        syncSidebarFromState()
+    }
+
+    // MARK: - NSSplitViewDelegate
+
+    func splitView(_ splitView: NSSplitView, canCollapseSubview subview: NSView) -> Bool {
+        subview === sidebarContainer
     }
 
     func fileTree(_ tree: FileTreeView, didSelect url: URL) {

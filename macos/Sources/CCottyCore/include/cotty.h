@@ -13,6 +13,7 @@ typedef int64_t cotty_surface_t;
 #define COTTY_ACTION_NEW_WINDOW     2
 #define COTTY_ACTION_CLOSE_SURFACE  3
 #define COTTY_ACTION_MARK_DIRTY     4
+#define COTTY_ACTION_YANK           5
 
 // App lifecycle
 cotty_app_t cotty_app_new(void);
@@ -63,6 +64,45 @@ int64_t cotty_surface_kind(cotty_surface_t surface);
 int64_t cotty_surface_mode(cotty_surface_t surface);
 void cotty_surface_set_viewport(cotty_surface_t surface, int64_t rows, int64_t cols);
 int64_t cotty_surface_scroll_offset(cotty_surface_t surface);
+
+// Editor grid (cell-based rendering — same Cell layout as terminal)
+int64_t cotty_editor_cells_ptr(cotty_surface_t surface);
+int64_t cotty_editor_rows(cotty_surface_t surface);
+int64_t cotty_editor_cols(cotty_surface_t surface);
+void cotty_editor_resize(cotty_surface_t surface, int64_t rows, int64_t cols);
+void cotty_editor_set_cursor_visible(cotty_surface_t surface, int64_t visible);
+void cotty_editor_rebuild(cotty_surface_t surface);
+int64_t cotty_editor_scroll_offset(cotty_surface_t surface);
+void cotty_editor_set_scroll_offset(cotty_surface_t surface, int64_t offset);
+void cotty_editor_scroll(cotty_surface_t surface, int64_t delta, int64_t precise, int64_t cell_height);
+int64_t cotty_editor_h_scroll_offset(cotty_surface_t surface);
+void cotty_editor_set_h_scroll_offset(cotty_surface_t surface, int64_t offset);
+void cotty_editor_h_scroll(cotty_surface_t surface, int64_t delta, int64_t precise, int64_t cell_width);
+int64_t cotty_editor_max_line_length(cotty_surface_t surface);
+
+// Editor cursor screen position
+int64_t cotty_editor_cursor_row(cotty_surface_t surface);
+int64_t cotty_editor_cursor_col(cotty_surface_t surface);
+
+// Editor mouse
+void cotty_editor_click(cotty_surface_t surface, int64_t row, int64_t col);
+void cotty_editor_drag(cotty_surface_t surface, int64_t row, int64_t col);
+
+// Editor yank buffer
+int64_t cotty_editor_yank_text(cotty_surface_t surface);
+int64_t cotty_editor_yank_text_len(cotty_surface_t surface);
+
+// Editor copy/cut/paste/select-all
+void cotty_editor_copy(cotty_surface_t surface);
+void cotty_editor_cut(cotty_surface_t surface);
+void cotty_editor_paste(cotty_surface_t surface, const uint8_t *ptr, int64_t len);
+void cotty_editor_select_all(cotty_surface_t surface);
+int64_t cotty_editor_yank_is_linewise(cotty_surface_t surface);
+
+// Multi-cursor
+void cotty_editor_add_cursor(cotty_surface_t surface, int64_t row, int64_t col);
+void cotty_editor_add_next_occurrence(cotty_surface_t surface);
+int64_t cotty_editor_cursor_count(cotty_surface_t surface);
 
 // Terminal surface lifecycle
 cotty_surface_t cotty_terminal_surface_new(cotty_app_t app, int64_t rows, int64_t cols);
@@ -168,6 +208,21 @@ int64_t cotty_inspector_content_rows(cotty_surface_t surface);
 int64_t cotty_inspector_scroll_offset(cotty_surface_t surface);
 void cotty_inspector_set_scroll(cotty_surface_t surface, int64_t offset);
 void cotty_inspector_rebuild_terminal_state(cotty_surface_t surface);
+void cotty_inspector_rebuild_editor_state(cotty_surface_t surface);
+
+// Debug toggles
+void cotty_debug_enable_buffer_validation(int64_t enable);
+void cotty_debug_enable_changeset_logging(int64_t enable);
+
+// Debug buffer state queries
+int64_t cotty_debug_buffer_gap_start(cotty_surface_t surface);
+int64_t cotty_debug_buffer_gap_end(cotty_surface_t surface);
+int64_t cotty_debug_buffer_data_count(cotty_surface_t surface);
+int64_t cotty_debug_buffer_validate(cotty_surface_t surface);
+
+// Debug history queries
+int64_t cotty_debug_history_revision_count(cotty_surface_t surface);
+int64_t cotty_debug_history_current(cotty_surface_t surface);
 
 // Semantic prompts (OSC 133)
 int64_t cotty_terminal_jump_prev_prompt(cotty_surface_t surface);
@@ -279,6 +334,7 @@ int64_t cotty_workspace_split_root(cotty_workspace_t ws);
 int64_t cotty_workspace_split_focused(cotty_workspace_t ws);
 
 // Workspace state
+int64_t cotty_workspace_toggle_sidebar(cotty_workspace_t ws);
 int64_t cotty_workspace_sidebar_visible(cotty_workspace_t ws);
 void cotty_workspace_set_sidebar_visible(cotty_workspace_t ws, int64_t visible);
 int64_t cotty_workspace_sidebar_width(cotty_workspace_t ws);

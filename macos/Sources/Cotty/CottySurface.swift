@@ -405,6 +405,119 @@ final class CottySurface {
         cotty_inspector_rebuild_terminal_state(handle)
     }
 
+    // MARK: - Editor Grid
+
+    var editorRows: Int { Int(cotty_editor_rows(handle)) }
+    var editorCols: Int { Int(cotty_editor_cols(handle)) }
+
+    var editorCellsPtr: UnsafeRawPointer? {
+        let ptr = cotty_editor_cells_ptr(handle)
+        guard ptr != 0 else { return nil }
+        return UnsafeRawPointer(bitPattern: Int(ptr))
+    }
+
+    func editorResize(rows: Int, cols: Int) {
+        cotty_editor_resize(handle, Int64(rows), Int64(cols))
+    }
+
+    func editorSetCursorVisible(_ visible: Bool) {
+        cotty_editor_set_cursor_visible(handle, visible ? 1 : 0)
+    }
+
+    func editorRebuild() {
+        cotty_editor_rebuild(handle)
+    }
+
+    var editorScrollOffset: Int { Int(cotty_editor_scroll_offset(handle)) }
+
+    func editorSetScrollOffset(_ offset: Int) {
+        cotty_editor_set_scroll_offset(handle, Int64(offset))
+    }
+
+    var editorLineCount: Int { Int(cotty_surface_buffer_line_count(handle)) }
+
+    func editorScroll(delta: Int64, precise: Int64, cellHeight: Int64) {
+        cotty_editor_scroll(handle, delta, precise, cellHeight)
+    }
+
+    var editorHScrollOffset: Int { Int(cotty_editor_h_scroll_offset(handle)) }
+
+    func editorSetHScrollOffset(_ offset: Int) {
+        cotty_editor_set_h_scroll_offset(handle, Int64(offset))
+    }
+
+    func editorHScroll(delta: Int64, precise: Int64, cellWidth: Int64) {
+        cotty_editor_h_scroll(handle, delta, precise, cellWidth)
+    }
+
+    var editorMaxLineLength: Int { Int(cotty_editor_max_line_length(handle)) }
+
+    // MARK: - Editor Cursor Screen Position
+
+    var editorCursorRow: Int { Int(cotty_editor_cursor_row(handle)) }
+    var editorCursorCol: Int { Int(cotty_editor_cursor_col(handle)) }
+
+    // MARK: - Editor Mouse
+
+    func editorClick(row: Int, col: Int) {
+        cotty_editor_click(handle, Int64(row), Int64(col))
+    }
+
+    func editorDrag(row: Int, col: Int) {
+        cotty_editor_drag(handle, Int64(row), Int64(col))
+    }
+
+    // MARK: - Editor Copy/Cut/Paste
+
+    func editorCopy() {
+        cotty_editor_copy(handle)
+    }
+
+    func editorCut() {
+        cotty_editor_cut(handle)
+    }
+
+    func editorPaste(_ text: String) {
+        text.withCString { cStr in
+            cStr.withMemoryRebound(to: UInt8.self, capacity: text.utf8.count) { ptr in
+                cotty_editor_paste(handle, ptr, Int64(text.utf8.count))
+            }
+        }
+    }
+
+    func editorSelectAll() {
+        cotty_editor_select_all(handle)
+    }
+
+    // MARK: - Editor Yank Buffer
+
+    var editorYankText: String? {
+        let ptr = cotty_editor_yank_text(handle)
+        let len = cotty_editor_yank_text_len(handle)
+        guard ptr != 0, len > 0 else { return nil }
+        let bufPtr = UnsafeRawPointer(bitPattern: Int(ptr))!
+        let data = Data(bytes: bufPtr, count: Int(len))
+        return String(data: data, encoding: .utf8)
+    }
+
+    var editorYankIsLinewise: Bool {
+        cotty_editor_yank_is_linewise(handle) != 0
+    }
+
+    // MARK: - Multi-cursor
+
+    func editorAddCursor(row: Int, col: Int) {
+        cotty_editor_add_cursor(handle, Int64(row), Int64(col))
+    }
+
+    func editorAddNextOccurrence() {
+        cotty_editor_add_next_occurrence(handle)
+    }
+
+    var editorCursorCount: Int {
+        Int(cotty_editor_cursor_count(handle))
+    }
+
     // MARK: - Convenience
 
     var bufferContent: String {

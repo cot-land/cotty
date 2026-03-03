@@ -669,6 +669,207 @@ class MetalRenderer {
         cmdBuf.commit()
     }
 
+    /// Render the editor cell grid into its Metal layer.
+    /// Same cell rendering logic as the inspector — reads pre-rendered cell grid from Cot.
+    /// No mutex needed (editor has no IO thread).
+    func renderEditor(
+        layer: CAMetalLayer,
+        surface: CottySurface,
+        cursorVisible: Bool = true,
+        focused: Bool = true
+    ) {
+        guard let drawable = layer.nextDrawable() else { return }
+
+        let drawW = Float(layer.drawableSize.width)
+        let drawH = Float(layer.drawableSize.height)
+        let scale = Float(layer.contentsScale)
+        let pad = Float(Theme.shared.paddingPoints) * scale
+
+        let cellW = Float(atlas.cellWidth)
+        let cellH = Float(atlas.cellHeight)
+
+        let edRows = surface.editorRows
+        let edCols = surface.editorCols
+        guard let edBase = surface.editorCellsPtr else {
+            // No grid yet — just clear
+            let passDesc = MTLRenderPassDescriptor()
+            passDesc.colorAttachments[0].texture = drawable.texture
+            passDesc.colorAttachments[0].loadAction = .clear
+            passDesc.colorAttachments[0].storeAction = .store
+            passDesc.colorAttachments[0].clearColor = MTLClearColor(
+                red: Theme.shared.bgR, green: Theme.shared.bgG, blue: Theme.shared.bgB, alpha: Theme.shared.bgOpacity
+            )
+            let cmdBuf = commandQueue.makeCommandBuffer()!
+            let enc = cmdBuf.makeRenderCommandEncoder(descriptor: passDesc)!
+            enc.endEncoding()
+            cmdBuf.present(drawable)
+            cmdBuf.commit()
+            return
+        }
+
+        var cells: [CellData] = []
+        let solid = atlas.solidInfo
+        let edStride = 64  // 8 fields * 8 bytes
+
+        let defFgR = Theme.shared.fgR, defFgG = Theme.shared.fgG, defFgB = Theme.shared.fgB
+
+        for row in 0..<edRows {
+            for col in 0..<edCols {
+                let offset = (row * edCols + col) * edStride
+                let cellPtr = edBase + offset
+
+                let codepoint = cellPtr.load(fromByteOffset: 0, as: Int64.self)
+                let fgType = cellPtr.load(fromByteOffset: 8, as: Int64.self)
+                let fgVal = cellPtr.load(fromByteOffset: 16, as: Int64.self)
+                let bgType = cellPtr.load(fromByteOffset: 24, as: Int64.self)
+                let bgVal = cellPtr.load(fromByteOffset: 32, as: Int64.self)
+
+                // Resolve colors (editor always uses COLOR_RGB)
+                let (fgR, fgG, fgB) = resolveColor(fgType, fgVal, nil, defFgR, defFgG, defFgB)
+                let (bgR, bgG, bgB) = resolveColor(bgType, bgVal, nil, 0, 0, 0)
+
+                // Background — skip COLOR_NONE
+                if bgType != 0 {
+                    cells.append(CellData(
+                        gridX: UInt16(col), gridY: UInt16(row),
+                        atlasX: solid.atlasX, atlasY: solid.atlasY,
+                        glyphW: solid.width, glyphH: solid.height,
+                        offX: 0, offY: 0,
+                        r: bgR, g: bgG, b: bgB, a: 0xFF
+                    ))
+                }
+
+                // Selection overlay (between background and foreground)
+                let flags = cellPtr.load(fromByteOffset: 40, as: Int64.self)
+                if flags & 8 != 0 {  // CELL_SELECTED
+                    cells.append(CellData(
+                        gridX: UInt16(col), gridY: UInt16(row),
+                        atlasX: solid.atlasX, atlasY: solid.atlasY,
+                        glyphW: solid.width, glyphH: solid.height,
+                        offX: 0, offY: 0,
+                        r: Theme.shared.selR, g: Theme.shared.selG, b: Theme.shared.selB, a: Theme.shared.selA
+                    ))
+                }
+
+                // Bracket match highlight
+                if flags & 32768 != 0 {  // CELL_BRACKET_MATCH
+                    cells.append(CellData(
+                        gridX: UInt16(col), gridY: UInt16(row),
+                        atlasX: solid.atlasX, atlasY: solid.atlasY,
+                        glyphW: solid.width, glyphH: solid.height,
+                        offX: 0, offY: 0,
+                        r: 0x80, g: 0x80, b: 0x60, a: 0x60
+                    ))
+                }
+
+                // Foreground glyph
+                if codepoint >= 32 {
+                    let g = atlas.lookup(UInt32(codepoint))
+                    cells.append(CellData(
+                        gridX: UInt16(col), gridY: UInt16(row),
+                        atlasX: g.atlasX, atlasY: g.atlasY,
+                        glyphW: g.width, glyphH: g.height,
+                        offX: 0, offY: 0,
+                        r: fgR, g: fgG, b: fgB, a: 0xFF
+                    ))
+                }
+            }
+        }
+
+        // Cursor rendering — scan grid for CELL_CURSOR flag (supports multi-cursor)
+        do {
+            let cR = Theme.shared.cursorR
+            let cG = Theme.shared.cursorG
+            let cB = Theme.shared.cursorB
+            let cA: UInt8 = 0x80
+            let cursorW = UInt16(max(2, atlas.cellWidth / 8))
+            let t: UInt16 = max(1, UInt16(atlas.cellHeight / 16))
+            let tw: UInt16 = max(1, UInt16(atlas.cellWidth / 16))
+
+            for row in 0..<edRows {
+                for col in 0..<edCols {
+                    let cellPtr = edBase + (row * edCols + col) * edStride
+                    let flags = cellPtr.load(fromByteOffset: 40, as: Int64.self)
+                    guard flags & 65536 != 0 else { continue }  // CELL_CURSOR
+
+                    if !focused {
+                        // Hollow outline: 4 thin rects
+                        cells.append(CellData(gridX: UInt16(col), gridY: UInt16(row),
+                            atlasX: solid.atlasX, atlasY: solid.atlasY, glyphW: solid.width, glyphH: t,
+                            offX: 0, offY: 0, r: cR, g: cG, b: cB, a: cA))
+                        cells.append(CellData(gridX: UInt16(col), gridY: UInt16(row),
+                            atlasX: solid.atlasX, atlasY: solid.atlasY, glyphW: solid.width, glyphH: t,
+                            offX: 0, offY: Int16(atlas.cellHeight) - Int16(t), r: cR, g: cG, b: cB, a: cA))
+                        cells.append(CellData(gridX: UInt16(col), gridY: UInt16(row),
+                            atlasX: solid.atlasX, atlasY: solid.atlasY, glyphW: tw, glyphH: solid.height,
+                            offX: 0, offY: 0, r: cR, g: cG, b: cB, a: cA))
+                        cells.append(CellData(gridX: UInt16(col), gridY: UInt16(row),
+                            atlasX: solid.atlasX, atlasY: solid.atlasY, glyphW: tw, glyphH: solid.height,
+                            offX: Int16(solid.width) - Int16(tw), offY: 0, r: cR, g: cG, b: cB, a: cA))
+                    } else {
+                        // Bar cursor: narrow width, full height
+                        cells.append(CellData(
+                            gridX: UInt16(col), gridY: UInt16(row),
+                            atlasX: solid.atlasX, atlasY: solid.atlasY,
+                            glyphW: cursorW, glyphH: solid.height,
+                            offX: 0, offY: 0,
+                            r: cR, g: cG, b: cB, a: cA
+                        ))
+                    }
+                }
+            }
+        }
+
+        // Orthographic projection
+        let proj = simd_float4x4(
+            SIMD4<Float>(2.0 / drawW, 0, 0, 0),
+            SIMD4<Float>(0, -2.0 / drawH, 0, 0),
+            SIMD4<Float>(0, 0, 1, 0),
+            SIMD4<Float>(-1, 1, 0, 1)
+        )
+        var uniforms = Uniforms(
+            projection: proj,
+            cellSize: SIMD2<Float>(cellW, cellH),
+            atlasSize: SIMD2<Float>(Float(atlas.atlasWidth), Float(atlas.atlasHeight)),
+            padding: SIMD2<Float>(pad, pad)
+        )
+
+        let passDesc = MTLRenderPassDescriptor()
+        passDesc.colorAttachments[0].texture = drawable.texture
+        passDesc.colorAttachments[0].loadAction = .clear
+        passDesc.colorAttachments[0].storeAction = .store
+        passDesc.colorAttachments[0].clearColor = MTLClearColor(
+            red: Theme.shared.bgR, green: Theme.shared.bgG, blue: Theme.shared.bgB, alpha: Theme.shared.bgOpacity
+        )
+
+        let cmdBuf = commandQueue.makeCommandBuffer()!
+        let enc = cmdBuf.makeRenderCommandEncoder(descriptor: passDesc)!
+
+        if !cells.isEmpty {
+            let cellBuf = device.makeBuffer(
+                bytes: cells,
+                length: cells.count * MemoryLayout<CellData>.stride,
+                options: .storageModeShared
+            )!
+
+            enc.setRenderPipelineState(pipelineState)
+            enc.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 0)
+            enc.setVertexBuffer(cellBuf, offset: 0, index: 1)
+            enc.setFragmentTexture(atlas.texture, index: 0)
+
+            enc.drawPrimitives(
+                type: .triangleStrip,
+                vertexStart: 0,
+                vertexCount: 4,
+                instanceCount: cells.count
+            )
+        }
+
+        enc.endEncoding()
+        cmdBuf.present(drawable)
+        cmdBuf.commit()
+    }
+
     /// Resolve a semantic color (type + value) to an RGB tuple.
     /// - type 0 (COLOR_NONE): use the provided default color
     /// - type 1 (COLOR_PALETTE): look up palette index (val) → RGB from palette pointer

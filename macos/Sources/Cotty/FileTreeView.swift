@@ -88,9 +88,37 @@ class FileTreeView: NSView {
     }
 
     fileprivate func updateContentSize() {
-        let rows = fileTree?.rowCount ?? 0
-        let height = max(CGFloat(rows) * Self.rowHeight, scrollView.contentSize.height)
-        contentView.frame = NSRect(x: 0, y: 0, width: scrollView.contentSize.width, height: height)
+        guard let ft = fileTree else {
+            contentView.frame = NSRect(origin: .zero, size: scrollView.contentSize)
+            scrollView.hasVerticalScroller = false
+            scrollView.hasHorizontalScroller = false
+            return
+        }
+
+        let rows = ft.rowCount
+        let contentHeight = CGFloat(rows) * Self.rowHeight
+        let visibleHeight = scrollView.contentSize.height
+        let visibleWidth = scrollView.contentSize.width
+
+        // Calculate max row width: leftPad + depth*indent + icon + gap + textWidth + rightPad
+        let attrs: [NSAttributedString.Key: Any] = [.font: textFont]
+        let rightPad: CGFloat = 12
+        var maxWidth: CGFloat = 0
+        for i in 0..<rows {
+            let depth = ft.rowDepth(at: i)
+            let name = ft.rowName(at: i) as NSString
+            let textWidth = name.size(withAttributes: attrs).width
+            let rowWidth = Self.leftPad + CGFloat(depth) * Self.indentWidth
+                + Self.iconSize + Self.gapAfterIcon + textWidth + rightPad
+            if rowWidth > maxWidth { maxWidth = rowWidth }
+        }
+
+        let height = max(contentHeight, visibleHeight)
+        let width = max(maxWidth, visibleWidth)
+        contentView.frame = NSRect(x: 0, y: 0, width: width, height: height)
+
+        scrollView.hasVerticalScroller = contentHeight > visibleHeight
+        scrollView.hasHorizontalScroller = maxWidth > visibleWidth
     }
 
     override func resize(withOldSuperviewSize oldSize: NSSize) {

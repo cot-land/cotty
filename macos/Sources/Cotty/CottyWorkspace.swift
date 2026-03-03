@@ -143,6 +143,11 @@ final class CottyWorkspace {
 
     // MARK: - Workspace State
 
+    /// Toggle sidebar visibility in Cot. Returns the new state.
+    func toggleSidebar() -> Bool {
+        cotty_workspace_toggle_sidebar(handle) != 0
+    }
+
     var sidebarVisible: Bool {
         get { cotty_workspace_sidebar_visible(handle) != 0 }
         set { cotty_workspace_set_sidebar_visible(handle, newValue ? 1 : 0) }
