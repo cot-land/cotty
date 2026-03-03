@@ -15,7 +15,7 @@ class EditorView: NSView {
 
     // Metal
     private static let metalDevice = MTLCreateSystemDefaultDevice()!
-    private var renderer: MetalRenderer!
+    private(set) var renderer: MetalRenderer!
 
     // Views
     private let metalView: MetalLayerView
@@ -134,10 +134,12 @@ class EditorView: NSView {
             layer: metalView.metalLayer,
             surface: surface,
             cursorVisible: cursorBlinkOn,
+            cursorShape: Theme.shared.cursorStyleEditor,
             focused: isFocused
         )
         updateScrollbar()
         workspaceController?.updateStatusBar()
+        workspaceController?.notifyInspectorRender()
     }
 
     // MARK: - Scrollbar

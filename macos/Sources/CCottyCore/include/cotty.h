@@ -256,6 +256,10 @@ int64_t cotty_config_bg_opacity(void);
 int64_t cotty_config_option_as_alt(void);
 void cotty_config_set_font_size(int64_t size);
 void cotty_config_reload(void);
+int64_t cotty_config_cursor_style_terminal(void);
+int64_t cotty_config_cursor_style_editor(void);
+int64_t cotty_config_inspector_font_size(void);
+void cotty_config_save(void);
 
 // Command Palette
 void cotty_palette_toggle(void);

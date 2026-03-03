@@ -11,6 +11,7 @@ class MetalRenderer {
     let pipelineState: MTLRenderPipelineState
     private(set) var atlas: GlyphAtlas
     private(set) var scaleFactor: CGFloat
+    private var fontSizeOverride: CGFloat?
 
     var cellWidthPoints: CGFloat { CGFloat(atlas.cellWidth) / scaleFactor }
     var cellHeightPoints: CGFloat { CGFloat(atlas.cellHeight) / scaleFactor }
@@ -38,13 +39,14 @@ class MetalRenderer {
         var padding: SIMD2<Float>
     }
 
-    init(device: MTLDevice, scaleFactor: CGFloat = 2.0) {
+    init(device: MTLDevice, scaleFactor: CGFloat = 2.0, fontSizeOverride: CGFloat? = nil) {
         self.device = device
         self.scaleFactor = scaleFactor
+        self.fontSizeOverride = fontSizeOverride
         self.commandQueue = device.makeCommandQueue()!
 
         // Create atlas at display resolution using Theme font
-        let fontSize = Theme.shared.fontSize * scaleFactor
+        let fontSize = (fontSizeOverride ?? Theme.shared.fontSize) * scaleFactor
         let font = CTFontCreateWithName(Theme.shared.fontName as CFString, fontSize, nil)
         self.atlas = GlyphAtlas(device: device, font: font)
 
@@ -122,7 +124,7 @@ class MetalRenderer {
 
     /// Recreate the glyph atlas with the current Theme font size.
     func rebuildAtlas() {
-        let fontSize = Theme.shared.fontSize * scaleFactor
+        let fontSize = (fontSizeOverride ?? Theme.shared.fontSize) * scaleFactor
         let font = CTFontCreateWithName(Theme.shared.fontName as CFString, fontSize, nil)
         atlas = GlyphAtlas(device: device, font: font)
     }
@@ -566,12 +568,13 @@ class MetalRenderer {
         let cellW = Float(atlas.cellWidth)
         let cellH = Float(atlas.cellHeight)
 
-        // Read inspector grid under terminal lock
-        surface.lockTerminal()
+        // Read inspector grid under terminal lock (terminal only — editor is main-thread)
+        let needsLock = surface.isTerminal
+        if needsLock { surface.lockTerminal() }
         let inspRows = surface.inspectorRows
         let inspCols = surface.inspectorCols
         guard let inspBase = surface.inspectorCellsPtr else {
-            surface.unlockTerminal()
+            if needsLock { surface.unlockTerminal() }
             return
         }
 
@@ -618,7 +621,7 @@ class MetalRenderer {
                 }
             }
         }
-        surface.unlockTerminal()
+        if needsLock { surface.unlockTerminal() }
 
         // Orthographic projection
         let proj = simd_float4x4(
@@ -676,6 +679,7 @@ class MetalRenderer {
         layer: CAMetalLayer,
         surface: CottySurface,
         cursorVisible: Bool = true,
+        cursorShape: Int = 1,
         focused: Bool = true
     ) {
         guard let drawable = layer.nextDrawable() else { return }
@@ -782,9 +786,26 @@ class MetalRenderer {
             let cG = Theme.shared.cursorG
             let cB = Theme.shared.cursorB
             let cA: UInt8 = 0x80
-            let cursorW = UInt16(max(2, atlas.cellWidth / 8))
             let t: UInt16 = max(1, UInt16(atlas.cellHeight / 16))
             let tw: UInt16 = max(1, UInt16(atlas.cellWidth / 16))
+
+            // Compute cursor dimensions based on shape
+            let cursorW: UInt16
+            let cursorH: UInt16
+            let cursorOffY: Int16
+            if cursorShape == 2 {  // underline
+                cursorW = solid.width
+                cursorH = UInt16(max(2, atlas.cellHeight / 8))
+                cursorOffY = Int16(atlas.cellHeight) - Int16(cursorH)
+            } else if cursorShape == 1 {  // bar
+                cursorW = UInt16(max(2, atlas.cellWidth / 8))
+                cursorH = solid.height
+                cursorOffY = 0
+            } else {  // block (0)
+                cursorW = solid.width
+                cursorH = solid.height
+                cursorOffY = 0
+            }
 
             for row in 0..<edRows {
                 for col in 0..<edCols {
@@ -807,12 +828,11 @@ class MetalRenderer {
                             atlasX: solid.atlasX, atlasY: solid.atlasY, glyphW: tw, glyphH: solid.height,
                             offX: Int16(solid.width) - Int16(tw), offY: 0, r: cR, g: cG, b: cB, a: cA))
                     } else {
-                        // Bar cursor: narrow width, full height
                         cells.append(CellData(
                             gridX: UInt16(col), gridY: UInt16(row),
                             atlasX: solid.atlasX, atlasY: solid.atlasY,
-                            glyphW: cursorW, glyphH: solid.height,
-                            offX: 0, offY: 0,
+                            glyphW: cursorW, glyphH: cursorH,
+                            offX: 0, offY: cursorOffY,
                             r: cR, g: cG, b: cB, a: cA
                         ))
                     }

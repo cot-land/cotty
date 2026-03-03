@@ -1,4 +1,5 @@
 import AppKit
+import CCottyCore
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     var cottyApp: CottyApp!
@@ -72,6 +73,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    @objc func openSettings(_ sender: Any) {
+        let configPath = NSHomeDirectory() + "/.config/cotty/config.json"
+        let configURL = URL(fileURLWithPath: configPath)
+
+        // Ensure directory and file exist
+        let dir = (configPath as NSString).deletingLastPathComponent
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        if !FileManager.default.fileExists(atPath: configPath) {
+            cotty_config_save()
+        }
+
+        if let wc = activeWorkspaceController() {
+            wc.openSettingsFile(configURL)
+        } else {
+            let ws = CottyWorkspace(app: cottyApp)
+            let wc = WorkspaceWindowController(workspace: ws)
+            wc.addEditorTab(fileURL: configURL)
+            workspaceControllers.append(wc)
+        }
+    }
+
     func workspaceControllerDidClose(_ controller: WorkspaceWindowController) {
         workspaceControllers.removeAll { $0 === controller }
     }
@@ -85,6 +107,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let appMenuItem = NSMenuItem()
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "About Cotty", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "Settings...", action: #selector(openSettings(_:)), keyEquivalent: ",")
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Quit Cotty", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appMenuItem.submenu = appMenu
@@ -134,7 +158,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let viewMenuItem = NSMenuItem()
         let viewMenu = NSMenu(title: "View")
         viewMenu.addItem(withTitle: "Toggle Sidebar", action: #selector(WorkspaceWindowController.toggleSidebar(_:)), keyEquivalent: "b")
-        let inspectorItem = NSMenuItem(title: "Terminal Inspector", action: #selector(WorkspaceWindowController.toggleTerminalInspector(_:)), keyEquivalent: "i")
+        let inspectorItem = NSMenuItem(title: "Inspector", action: #selector(WorkspaceWindowController.toggleInspector(_:)), keyEquivalent: "i")
         inspectorItem.keyEquivalentModifierMask = [.command, .option]
         viewMenu.addItem(inspectorItem)
         viewMenu.addItem(.separator())

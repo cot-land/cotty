@@ -226,14 +226,25 @@ class TerminalView: NSView {
 
         // Check cursor shape for blink behavior
         let shape = surface.cursorShape
-        let isBlinkingShape = shape == 0 || shape == 1 || shape == 3 || shape == 5
+        // Shape 0 = "use default" in DECSCUSR — apply config cursor style
+        let effectiveShape: Int
+        if shape == 0 {
+            switch Theme.shared.cursorStyleTerminal {
+            case 1: effectiveShape = 5  // bar (blinking)
+            case 2: effectiveShape = 3  // underline (blinking)
+            default: effectiveShape = 0 // block (default)
+            }
+        } else {
+            effectiveShape = shape
+        }
+        let isBlinkingShape = effectiveShape == 0 || effectiveShape == 1 || effectiveShape == 3 || effectiveShape == 5
         let effectiveCursorVisible = (isBlinkingShape ? cursorVisible : true) && surface.terminalCursorVisible
 
         renderer.renderTerminal(
             layer: metalView.metalLayer,
             surface: surface,
             cursorVisible: effectiveCursorVisible,
-            cursorShape: shape,
+            cursorShape: effectiveShape,
             focused: isFocused
         )
 
@@ -490,7 +501,7 @@ class TerminalView: NSView {
         menu.addItem(withTitle: "Split Right", action: #selector(WorkspaceWindowController.splitRight(_:)), keyEquivalent: "")
         menu.addItem(withTitle: "Split Down", action: #selector(WorkspaceWindowController.splitDown(_:)), keyEquivalent: "")
         menu.addItem(.separator())
-        menu.addItem(withTitle: "Toggle Inspector", action: #selector(WorkspaceWindowController.toggleTerminalInspector(_:)), keyEquivalent: "")
+        menu.addItem(withTitle: "Toggle Inspector", action: #selector(WorkspaceWindowController.toggleInspector(_:)), keyEquivalent: "")
 
         return menu
     }

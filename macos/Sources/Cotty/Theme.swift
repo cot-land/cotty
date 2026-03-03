@@ -46,6 +46,18 @@ class Theme {
     // Unfocused split dimming (0.0 = fully dimmed, 1.0 = no dimming)
     var unfocusedSplitOpacity: Double = 0.75
 
+    // Cursor style: 0=block, 1=bar, 2=underline
+    var cursorStyleTerminal: Int = 0  // block
+    var cursorStyleEditor: Int = 1    // bar
+
+    // Inspector font size: 0=auto (fontSize - 4, min 10)
+    var inspectorFontSize: CGFloat = 0
+
+    var effectiveInspectorFontSize: CGFloat {
+        if inspectorFontSize > 0 { return inspectorFontSize }
+        return max(10, fontSize - 4)
+    }
+
     /// Load theme values from Cot config via FFI.
     /// Must be called after cotty_app_new().
     func load() {
@@ -103,6 +115,11 @@ class Theme {
         selR = UInt8(clamping: cotty_config_sel_bg_r())
         selG = UInt8(clamping: cotty_config_sel_bg_g())
         selB = UInt8(clamping: cotty_config_sel_bg_b())
+
+        // Cursor styles
+        cursorStyleTerminal = Int(cotty_config_cursor_style_terminal())
+        cursorStyleEditor = Int(cotty_config_cursor_style_editor())
+        inspectorFontSize = CGFloat(cotty_config_inspector_font_size())
     }
 
     /// Set font size via FFI and update local value.

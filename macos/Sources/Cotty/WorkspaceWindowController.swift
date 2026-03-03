@@ -71,9 +71,14 @@ class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NSSplitVi
         return surfacesBySurface[workspace.tabSurface(at: idx)]
     }
 
-    /// The active terminal view (used by InspectorView to return focus).
+    /// The active terminal view.
     var activeTerminalView: TerminalView? {
         selectedView as? TerminalView
+    }
+
+    /// The active content view (terminal or editor — used by InspectorView to return focus).
+    var activeContentView: NSView? {
+        selectedView
     }
 
     /// Build tab info array from CottyWorkspace for the tab bar.
@@ -288,8 +293,8 @@ class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NSSplitVi
             window?.makeFirstResponder(view)
         }
 
-        // Restore inspector if terminal tab had it visible
-        if workspace.tabIsTerminal(at: index) && workspace.tabInspectorVisible(at: index) {
+        // Restore inspector if tab had it visible
+        if workspace.tabInspectorVisible(at: index) {
             showInspector()
         }
 
@@ -453,11 +458,11 @@ class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NSSplitVi
         )
     }
 
-    // MARK: - Inspector Toggle (terminal only)
+    // MARK: - Inspector Toggle
 
-    @objc func toggleTerminalInspector(_ sender: Any) {
+    @objc func toggleInspector(_ sender: Any) {
         let idx = workspace.selectedIndex
-        guard idx >= 0, workspace.tabIsTerminal(at: idx) else { return }
+        guard idx >= 0 else { return }
         if inspectorVisible {
             workspace.setTabInspectorVisible(at: idx, visible: false)
             hideInspector()
@@ -469,22 +474,38 @@ class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NSSplitVi
 
     private func showInspector() {
         let idx = workspace.selectedIndex
-        guard idx >= 0, workspace.tabIsTerminal(at: idx) else { return }
+        guard idx >= 0 else { return }
         let surfaceHandle = workspace.tabSurface(at: idx)
-        guard let surface = surfacesBySurface[surfaceHandle],
-              let tv = viewsBySurface[surfaceHandle] as? TerminalView else { return }
+        guard let surface = surfacesBySurface[surfaceHandle] else { return }
+        let isTerminal = workspace.tabIsTerminal(at: idx)
+
+        // Get device from the appropriate view's renderer
+        let viewRenderer: MetalRenderer?
+        if let tv = viewsBySurface[surfaceHandle] as? TerminalView {
+            viewRenderer = tv.renderer
+        } else if let ev = viewsBySurface[surfaceHandle] as? EditorView {
+            viewRenderer = ev.renderer
+        } else {
+            return
+        }
+        guard let renderer = viewRenderer else { return }
         let bounds = contentContainer.bounds
 
-        surface.lockTerminal()
-        if !surface.inspectorActive { surface.toggleInspector() }
-        surface.unlockTerminal()
+        if isTerminal {
+            surface.lockTerminal()
+            if !surface.inspectorActive { surface.toggleInspector() }
+            surface.unlockTerminal()
+        } else {
+            if !surface.inspectorActive { surface.toggleInspector() }
+            surface.inspectorSetPanel(4)  // PANEL_EDITOR
+        }
 
-        // Recreate inspector if surface changed (different terminal tab)
+        // Recreate inspector if surface changed (different tab)
         if inspectorView == nil || inspectorView!.surface !== surface {
             inspectorView?.removeFromSuperview()
             let iv = InspectorView(
                 frame: NSRect(x: 0, y: 0, width: bounds.width, height: inspectorHeight),
-                surface: surface, renderer: tv.renderer
+                surface: surface, device: renderer.device, isTerminal: isTerminal
             )
             iv.workspaceController = self
             contentContainer.addSubview(iv)
@@ -508,11 +529,15 @@ class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NSSplitVi
 
     private func hideInspector() {
         let idx = workspace.selectedIndex
-        if idx >= 0, workspace.tabIsTerminal(at: idx) {
+        if idx >= 0 {
             if let surface = surfacesBySurface[workspace.tabSurface(at: idx)] {
-                surface.lockTerminal()
-                if surface.inspectorActive { surface.toggleInspector() }
-                surface.unlockTerminal()
+                if workspace.tabIsTerminal(at: idx) {
+                    surface.lockTerminal()
+                    if surface.inspectorActive { surface.toggleInspector() }
+                    surface.unlockTerminal()
+                } else {
+                    if surface.inspectorActive { surface.toggleInspector() }
+                }
             }
         }
         hideInspectorViews()
@@ -601,10 +626,30 @@ class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NSSplitVi
             surface.setClean()
             filePathsBySurface[surfaceHandle] = url
             updateEditorChrome()
+
+            // Auto-reload if this is the config file
+            let configPath = NSHomeDirectory() + "/.config/cotty/config.json"
+            if url.path == configPath {
+                reloadConfig(nil)
+            }
         } catch {
             let alert = NSAlert(error: error)
             alert.runModal()
         }
+    }
+
+    /// Open the config file in an existing editor tab or create a new one.
+    func openSettingsFile(_ url: URL) {
+        // Check if any existing tab has this file open
+        for i in 0..<workspace.tabCount {
+            let handle = workspace.tabSurface(at: i)
+            if filePathsBySurface[handle] == url {
+                selectTab(at: i)
+                return
+            }
+        }
+        // Open in new editor tab
+        addEditorTab(fileURL: url)
     }
 
     // MARK: - File Tree
@@ -750,7 +795,7 @@ class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NSSplitVi
         case 2: delegate.newTerminal(self)
         case 3: delegate.newEditor(self)
         case 4: toggleSidebar(self)
-        case 5: toggleTerminalInspector(self)
+        case 5: toggleInspector(self)
         case 6: reloadConfig(self)
         case 7: increaseFontSize(self)
         case 8: decreaseFontSize(self)
@@ -935,7 +980,15 @@ class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NSSplitVi
             if let tv = view as? TerminalView {
                 tv.renderer.rebuildAtlas()
                 tv.setFrameSize(tv.frame.size)
+            } else if let ev = view as? EditorView {
+                ev.renderer.rebuildAtlas()
+                ev.setFrameSize(ev.frame.size)
             }
+        }
+        // Rebuild inspector with new font size
+        if inspectorVisible, let iv = inspectorView {
+            iv.renderer.rebuildAtlas()
+            iv.setFrameSize(iv.frame.size)
         }
     }
 

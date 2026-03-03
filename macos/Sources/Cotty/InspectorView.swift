@@ -8,8 +8,9 @@ import QuartzCore
 /// not character cells). Includes a native scrollbar overlay.
 class InspectorView: NSView {
     let surface: CottySurface
+    let isTerminal: Bool
     weak var workspaceController: WorkspaceWindowController?
-    private let renderer: MetalRenderer
+    private(set) var renderer: MetalRenderer
     private let metalView: InspectorMetalLayerView
 
     // Native tab bar (like Ghostty's ImGui docked window tabs)
@@ -23,10 +24,14 @@ class InspectorView: NSView {
 
     override var acceptsFirstResponder: Bool { true }
 
-    init(frame: NSRect, surface: CottySurface, renderer: MetalRenderer) {
+    init(frame: NSRect, surface: CottySurface, device: MTLDevice, isTerminal: Bool = true) {
         self.surface = surface
-        self.renderer = renderer
-        metalView = InspectorMetalLayerView(frame: frame, device: renderer.device)
+        self.isTerminal = isTerminal
+        self.renderer = MetalRenderer(
+            device: device,
+            fontSizeOverride: Theme.shared.effectiveInspectorFontSize
+        )
+        metalView = InspectorMetalLayerView(frame: frame, device: device)
         super.init(frame: frame)
 
         // Tab bar at top (non-flipped: top = max Y)
@@ -47,12 +52,18 @@ class InspectorView: NSView {
     // MARK: - Tab Bar (native NSSegmentedControl, like Ghostty's ImGui tabs)
 
     private func setupTabBar() {
-        tabControl.segmentCount = 4
-        tabControl.setLabel("Screen", forSegment: 0)
-        tabControl.setLabel("Modes", forSegment: 1)
-        tabControl.setLabel("Keyboard", forSegment: 2)
-        tabControl.setLabel("Terminal IO", forSegment: 3)
-        tabControl.selectedSegment = 0
+        if isTerminal {
+            tabControl.segmentCount = 4
+            tabControl.setLabel("Screen", forSegment: 0)
+            tabControl.setLabel("Modes", forSegment: 1)
+            tabControl.setLabel("Keyboard", forSegment: 2)
+            tabControl.setLabel("Terminal IO", forSegment: 3)
+            tabControl.selectedSegment = 0
+        } else {
+            tabControl.segmentCount = 1
+            tabControl.setLabel("Editor", forSegment: 0)
+            tabControl.selectedSegment = 0
+        }
         tabControl.segmentStyle = .texturedRounded
         tabControl.target = self
         tabControl.action = #selector(tabChanged)
@@ -63,10 +74,15 @@ class InspectorView: NSView {
     }
 
     @objc private func tabChanged(_ sender: NSSegmentedControl) {
-        surface.lockTerminal()
-        surface.inspectorSetPanel(sender.selectedSegment)
-        surface.inspectorRebuildTerminalState()
-        surface.unlockTerminal()
+        if isTerminal {
+            surface.lockTerminal()
+            surface.inspectorSetPanel(sender.selectedSegment)
+            surface.inspectorRebuildTerminalState()
+            surface.unlockTerminal()
+        } else {
+            surface.inspectorSetPanel(4)  // PANEL_EDITOR
+            surface.inspectorRebuildEditorState()
+        }
         renderFrame()
     }
 
@@ -147,22 +163,37 @@ class InspectorView: NSView {
         let pad = Theme.shared.paddingPoints
         let newCols = max(2, Int((contentFrame.width - 2 * pad) / renderer.cellWidthPoints))
         let newRows = max(2, Int((contentFrame.height - 2 * pad) / renderer.cellHeightPoints))
-        surface.lockTerminal()
-        surface.inspectorResize(rows: newRows, cols: newCols)
-        surface.unlockTerminal()
+        if isTerminal {
+            surface.lockTerminal()
+            surface.inspectorResize(rows: newRows, cols: newCols)
+            surface.unlockTerminal()
+        } else {
+            surface.inspectorResize(rows: newRows, cols: newCols)
+        }
     }
 
     // MARK: - Rendering
 
     func renderFrame() {
         guard metalView.bounds.width > 0, metalView.bounds.height > 0 else { return }
-        // Rebuild Screen/Modes panels with live terminal state
-        surface.lockTerminal()
-        surface.inspectorRebuildTerminalState()
-        let contentRows = surface.inspectorContentRows
-        let scrollOffset = surface.inspectorScrollOffset
-        let inspectorRows = surface.inspectorRows
-        surface.unlockTerminal()
+
+        let contentRows: Int
+        let scrollOffset: Int
+        let inspectorRows: Int
+
+        if isTerminal {
+            surface.lockTerminal()
+            surface.inspectorRebuildTerminalState()
+            contentRows = surface.inspectorContentRows
+            scrollOffset = surface.inspectorScrollOffset
+            inspectorRows = surface.inspectorRows
+            surface.unlockTerminal()
+        } else {
+            surface.inspectorRebuildEditorState()
+            contentRows = surface.inspectorContentRows
+            scrollOffset = surface.inspectorScrollOffset
+            inspectorRows = surface.inspectorRows
+        }
 
         renderer.renderInspector(
             layer: metalView.metalLayer,
@@ -225,9 +256,13 @@ class InspectorView: NSView {
         // Map scroll position to offset (non-flipped: top = max Y, bottom = 0)
         let offset = Int((sizerHeight - visibleHeight - scrollY) / cellH)
 
-        surface.lockTerminal()
-        surface.inspectorSetScroll(offset: max(0, offset))
-        surface.unlockTerminal()
+        if isTerminal {
+            surface.lockTerminal()
+            surface.inspectorSetScroll(offset: max(0, offset))
+            surface.unlockTerminal()
+        } else {
+            surface.inspectorSetScroll(offset: max(0, offset))
+        }
         renderFrame()
     }
 
@@ -241,7 +276,8 @@ class InspectorView: NSView {
     // MARK: - Keyboard Input
 
     override func keyDown(with event: NSEvent) {
-        if let chars = event.charactersIgnoringModifiers {
+        // Tab shortcuts only for terminal mode (4 tabs)
+        if isTerminal, let chars = event.charactersIgnoringModifiers {
             switch chars {
             case "1":
                 tabControl.selectedSegment = 0
@@ -266,30 +302,30 @@ class InspectorView: NSView {
 
         switch event.keyCode {
         case 126: // Up — scroll up (like Ghostty's K/UpArrow)
-            surface.lockTerminal()
+            if isTerminal { surface.lockTerminal() }
             surface.inspectorScroll(delta: -1)
-            surface.unlockTerminal()
+            if isTerminal { surface.unlockTerminal() }
             renderFrame()
         case 125: // Down — scroll down (like Ghostty's J/DownArrow)
-            surface.lockTerminal()
+            if isTerminal { surface.lockTerminal() }
             surface.inspectorScroll(delta: 1)
-            surface.unlockTerminal()
+            if isTerminal { surface.unlockTerminal() }
             renderFrame()
         case 116: // Page Up
-            surface.lockTerminal()
+            if isTerminal { surface.lockTerminal() }
             let pageSize = max(1, surface.inspectorRows - 2)
             surface.inspectorScroll(delta: -pageSize)
-            surface.unlockTerminal()
+            if isTerminal { surface.unlockTerminal() }
             renderFrame()
         case 121: // Page Down
-            surface.lockTerminal()
+            if isTerminal { surface.lockTerminal() }
             let pageSize = max(1, surface.inspectorRows - 2)
             surface.inspectorScroll(delta: pageSize)
-            surface.unlockTerminal()
+            if isTerminal { surface.unlockTerminal() }
             renderFrame()
-        case 36, 53: // Enter or Escape — return focus to terminal
+        case 36, 53: // Enter or Escape — return focus to content view
             if let wc = workspaceController {
-                window?.makeFirstResponder(wc.activeTerminalView)
+                window?.makeFirstResponder(wc.activeContentView)
             }
         default:
             super.keyDown(with: event)
@@ -301,10 +337,10 @@ class InspectorView: NSView {
     override func scrollWheel(with event: NSEvent) {
         let delta = Int(event.scrollingDeltaY)
         if delta != 0 {
-            surface.lockTerminal()
+            if isTerminal { surface.lockTerminal() }
             // Negate: scrollingDeltaY > 0 (swipe up) → scroll toward top (delta -1)
             surface.inspectorScroll(delta: delta > 0 ? -1 : 1)
-            surface.unlockTerminal()
+            if isTerminal { surface.unlockTerminal() }
             renderFrame()
         }
     }
