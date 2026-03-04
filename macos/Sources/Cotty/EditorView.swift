@@ -200,24 +200,22 @@ class EditorView: NSView {
         guard cellW > 0, cellH > 0 else { return }
         let pad = Theme.shared.paddingPoints
 
-        let lineCount = surface.editorLineCount
+        let displayRows = surface.editorDisplayRowCount
         let visibleRows = surface.editorRows
         let visibleCols = surface.editorCols
-        let maxLineLen = surface.editorMaxLineLength
         let scrollOffset = surface.editorScrollOffset
-        let hScrollOffset = surface.editorHScrollOffset
 
-        // Sizer dimensions reflect full content size
-        let contentHeight = CGFloat(max(lineCount, visibleRows)) * cellH + pad * 2
-        let contentWidth = CGFloat(max(maxLineLen + 6, visibleCols)) * cellW + pad * 2  // +6 for gutter
+        // Sizer dimensions: height uses display rows (soft-wrapped), width = viewport (no h-scroll)
+        let contentHeight = CGFloat(max(displayRows, visibleRows)) * cellH + pad * 2
+        let contentWidth = CGFloat(visibleCols) * cellW + pad * 2
 
         let newSize = NSSize(width: contentWidth, height: contentHeight)
         if sizerView.frame.size != newSize {
             sizerView.frame = NSRect(origin: .zero, size: newSize)
         }
 
-        // Sync scroll position to Cot state
-        let targetX = CGFloat(hScrollOffset) * cellW
+        // Sync scroll position to Cot state (no h-scroll with soft wrapping)
+        let targetX: CGFloat = 0
         let targetY = CGFloat(scrollOffset) * cellH
         let current = scrollView.contentView.bounds.origin
 

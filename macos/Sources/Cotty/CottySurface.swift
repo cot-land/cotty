@@ -439,6 +439,7 @@ final class CottySurface {
     }
 
     var editorLineCount: Int { Int(cotty_surface_buffer_line_count(handle)) }
+    var editorDisplayRowCount: Int { Int(cotty_editor_display_row_count(handle)) }
 
     func editorScroll(delta: Int64, precise: Int64, cellHeight: Int64) {
         cotty_editor_scroll(handle, delta, precise, cellHeight)

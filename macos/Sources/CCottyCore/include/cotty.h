@@ -73,6 +73,7 @@ void cotty_editor_resize(cotty_surface_t surface, int64_t rows, int64_t cols);
 void cotty_editor_set_cursor_visible(cotty_surface_t surface, int64_t visible);
 void cotty_editor_rebuild(cotty_surface_t surface);
 int64_t cotty_editor_scroll_offset(cotty_surface_t surface);
+int64_t cotty_editor_display_row_count(cotty_surface_t surface);
 void cotty_editor_set_scroll_offset(cotty_surface_t surface, int64_t offset);
 void cotty_editor_scroll(cotty_surface_t surface, int64_t delta, int64_t precise, int64_t cell_height);
 int64_t cotty_editor_h_scroll_offset(cotty_surface_t surface);
