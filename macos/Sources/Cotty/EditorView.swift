@@ -254,8 +254,8 @@ class EditorView: NSView {
             switch chars {
             case "f":
                 // Cmd+F — open search overlay
-                surface.editorSearchOpen()
                 resetCursorBlink()
+                surface.editorSearchOpen()
                 editorDirty = true
                 return
             case "g":
@@ -263,9 +263,9 @@ class EditorView: NSView {
                 if surface.editorSearchActive {
                     let (key, mods) = CottySurface.translateKeyEvent(event)
                     guard key != 0 else { return }
+                    resetCursorBlink()
                     _ = surface.editorSearchKey(key, mods: mods)
                     drainActions()
-                    resetCursorBlink()
                     editorDirty = true
                     return
                 }
@@ -282,9 +282,9 @@ class EditorView: NSView {
             case "v":
                 // Cmd+V — smart paste (single transaction, indent-aware, linewise-aware)
                 if let text = NSPasteboard.general.string(forType: .string) {
+                    resetCursorBlink()
                     surface.editorPaste(text)
                     drainActions()
-                    resetCursorBlink()
                     editorDirty = true
                 }
                 return
@@ -295,9 +295,9 @@ class EditorView: NSView {
                 return
             case "x":
                 // Cmd+X — cut selection to clipboard
+                resetCursorBlink()
                 surface.editorCut()
                 drainActions()
-                resetCursorBlink()
                 editorDirty = true
                 return
             case "a":
@@ -307,8 +307,8 @@ class EditorView: NSView {
                 return
             case "d":
                 // Cmd+D — add next occurrence (multi-cursor)
-                surface.editorAddNextOccurrence()
                 resetCursorBlink()
+                surface.editorAddNextOccurrence()
                 editorDirty = true
                 return
             default:
@@ -326,11 +326,13 @@ class EditorView: NSView {
         let (key, mods) = CottySurface.translateKeyEvent(event)
         guard key != 0 else { return }
 
+        // Force cursor visible before any action that may rebuild the grid
+        resetCursorBlink()
+
         // Route keys through search overlay when active
         if surface.editorSearchActive {
             if surface.editorSearchKey(key, mods: mods) {
                 drainActions()
-                resetCursorBlink()
                 editorDirty = true
                 return
             }
@@ -338,7 +340,6 @@ class EditorView: NSView {
 
         surface.sendKey(key, mods: mods)
         drainActions()
-        resetCursorBlink()
         editorDirty = true
     }
 
@@ -386,9 +387,11 @@ class EditorView: NSView {
         }
     }
 
+    /// Force cursor visible without restarting the blink clock.
+    /// The timer keeps ticking at its steady rhythm — next toggle happens on schedule.
     private func resetCursorBlink() {
+        cursorBlinkOn = true
         surface.editorSetCursorVisible(true)
-        startBlinkTimer()
     }
 
     // MARK: - Public API
@@ -411,10 +414,10 @@ class EditorView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
+        resetCursorBlink()
         let point = convert(event.locationInWindow, from: nil)
         let (row, col) = gridPosition(from: point)
         if event.modifierFlags.contains(.command) {
-            // Cmd+Click — add cursor at click position
             surface.editorAddCursor(row: row, col: col)
         } else {
             switch event.clickCount {
@@ -426,7 +429,6 @@ class EditorView: NSView {
                 surface.editorClick(row: row, col: col)
             }
         }
-        resetCursorBlink()
         editorDirty = true
     }
 
