@@ -42,6 +42,14 @@ final class CottySurface {
         }
     }
 
+    func setFilepath(_ path: String) {
+        path.withCString { cStr in
+            cStr.withMemoryRebound(to: UInt8.self, capacity: path.utf8.count) { ptr in
+                cotty_surface_set_filepath(handle, ptr, Int64(path.utf8.count))
+            }
+        }
+    }
+
     // MARK: - Buffer Queries
 
     var bufferLen: Int { Int(cotty_surface_buffer_len(handle)) }

@@ -586,6 +586,7 @@ class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NSSplitVi
         do {
             let content = try String(contentsOf: url, encoding: .utf8)
             surface.loadContent(content)
+            surface.setFilepath(url.path)
             ev.resetScroll()
             filePathsBySurface[surfaceHandle] = url
             updateEditorChrome()

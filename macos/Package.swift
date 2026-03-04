@@ -21,6 +21,7 @@ let package = Package(
                 .unsafeFlags([
                     "-L..",
                     "-lcotty",
+                    "-ltreesitter_shim",
                     "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../../../..",
                 ]),
             ]

@@ -28,6 +28,8 @@ class EditorView: NSView {
     private let scrollView = TrackingScrollView()
     private let sizerView = EditorSizerView()
     private var ignoreScrollUpdate = false
+    private var userDrivingScroll = false
+    private var lastCotScrollOffset = -1
 
     // VSync-driven rendering via CVDisplayLink
     private var displayLink: CVDisplayLink?
@@ -191,8 +193,9 @@ class EditorView: NSView {
     // MARK: - Scrollbar
 
     /// Update the sizer view size and scroll position for both axes.
-    /// NSScrollView handles all scroll input (wheel + scrollbar drag).
-    /// We just keep the sizer dimensions and scroll position in sync with Cot state.
+    /// NSScrollView owns the scroll position — we only sync Cot→NSScrollView
+    /// when Cot programmatically changed the offset (e.g. cursor movement),
+    /// never during user-driven momentum scrolling.
     private func updateScrollbar() {
         guard renderer != nil else { return }
         let cellW = renderer.cellWidthPoints
@@ -214,17 +217,21 @@ class EditorView: NSView {
             sizerView.frame = NSRect(origin: .zero, size: newSize)
         }
 
-        // Sync scroll position to Cot state (no h-scroll with soft wrapping)
-        let targetX: CGFloat = 0
-        let targetY = CGFloat(scrollOffset) * cellH
-        let current = scrollView.contentView.bounds.origin
+        // Only sync scroll position when Cot changed it programmatically
+        // (cursor ensureInView, goto line, etc.) — not during user scrolling
+        if scrollOffset != lastCotScrollOffset && !userDrivingScroll {
+            let targetX: CGFloat = 0
+            let targetY = CGFloat(scrollOffset) * cellH
+            let current = scrollView.contentView.bounds.origin
 
-        if abs(current.x - targetX) > 1 || abs(current.y - targetY) > 1 {
-            ignoreScrollUpdate = true
-            scrollView.contentView.scroll(to: NSPoint(x: targetX, y: targetY))
-            scrollView.reflectScrolledClipView(scrollView.contentView)
-            ignoreScrollUpdate = false
+            if abs(current.x - targetX) > 1 || abs(current.y - targetY) > 1 {
+                ignoreScrollUpdate = true
+                scrollView.contentView.scroll(to: NSPoint(x: targetX, y: targetY))
+                scrollView.reflectScrolledClipView(scrollView.contentView)
+                ignoreScrollUpdate = false
+            }
         }
+        lastCotScrollOffset = scrollOffset
     }
 
     /// When user scrolls (wheel or scrollbar drag), map pixel position to line/col offset.
@@ -240,12 +247,39 @@ class EditorView: NSView {
         let vOffset = Int(origin.y / cellH)
         let hOffset = Int(origin.x / cellW)
 
+        userDrivingScroll = true
         surface.editorSetScrollOffset(vOffset)
         surface.editorSetHScrollOffset(hOffset)
+        lastCotScrollOffset = surface.editorScrollOffset
         editorDirty = true
+
+        // Clear userDrivingScroll after momentum finishes.
+        // NSScrollView continues firing boundsChanged during momentum,
+        // so we use a delayed reset that only fires after scrolling stops.
+        NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(scrollMomentumEnded), object: nil)
+        perform(#selector(scrollMomentumEnded), with: nil, afterDelay: 0.2)
+    }
+
+    @objc private func scrollMomentumEnded() {
+        userDrivingScroll = false
     }
 
     // MARK: - Input Handling
+
+    override func scrollWheel(with event: NSEvent) {
+        // Ghostty pattern: handle scroll directly, don't delegate to NSScrollView.
+        // NSScrollView is only used for the scrollbar visual.
+        guard renderer != nil else { return }
+        var y = event.scrollingDeltaY
+        let precise = event.hasPreciseScrollingDeltas
+        if precise { y *= 2 }  // Ghostty's 2x precision multiplier
+        let cellH = renderer.cellHeightPoints
+        guard cellH > 0 else { return }
+        let delta = Int64(y * 1000)
+        let cellHMilli = Int64(cellH * 1000)
+        surface.editorScroll(delta: delta, precise: precise ? 1 : 0, cellHeight: cellHMilli)
+        editorDirty = true
+    }
 
     override func keyDown(with event: NSEvent) {
         // Cmd+key shortcuts
@@ -397,6 +431,11 @@ class EditorView: NSView {
     // MARK: - Public API
 
     func resetScroll() {
+        ignoreScrollUpdate = true
+        scrollView.contentView.scroll(to: .zero)
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+        ignoreScrollUpdate = false
+        lastCotScrollOffset = 0
         editorDirty = true
     }
 

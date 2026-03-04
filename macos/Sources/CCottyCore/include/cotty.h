@@ -35,6 +35,7 @@ void cotty_surface_free(cotty_surface_t surface);
 void cotty_surface_key(cotty_surface_t surface, int64_t key, int64_t mods);
 void cotty_surface_text(cotty_surface_t surface, const uint8_t *ptr, int64_t len);
 void cotty_surface_load_content(cotty_surface_t surface, const uint8_t *ptr, int64_t len);
+void cotty_surface_set_filepath(cotty_surface_t surface, const uint8_t *ptr, int64_t len);
 
 // Surface queries
 int64_t cotty_surface_buffer_len(cotty_surface_t surface);
