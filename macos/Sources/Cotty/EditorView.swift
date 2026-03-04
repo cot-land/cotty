@@ -5,6 +5,10 @@ import QuartzCore
 
 /// Editor surface rendered via a cell grid from Cot (same pipeline as terminal).
 /// Cot owns the grid — Swift just reads the raw cell pointer and renders via Metal.
+///
+/// Rendering is VSync-driven via CVDisplayLink (same pattern as TerminalView).
+/// Input handlers set a dirty flag; the display link callback renders on the next
+/// VSync if dirty. Structural changes (resize, backing) render immediately.
 class EditorView: NSView {
     // MARK: - State
 
@@ -25,6 +29,11 @@ class EditorView: NSView {
     private let sizerView = EditorSizerView()
     private var ignoreScrollUpdate = false
 
+    // VSync-driven rendering via CVDisplayLink
+    private var displayLink: CVDisplayLink?
+    private var editorDirty = false
+    private var cursorDirty = false
+
     // MARK: - NSView Setup
 
     override var isFlipped: Bool { true }
@@ -40,6 +49,11 @@ class EditorView: NSView {
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
+
+    deinit {
+        if let dl = displayLink { CVDisplayLinkStop(dl) }
+        blinkTimer?.invalidate()
+    }
 
     private func setupViews() {
         metalView.frame = bounds
@@ -82,6 +96,7 @@ class EditorView: NSView {
         metalView.metalLayer.contentsScale = window.backingScaleFactor
         updateDrawableSize()
         computeGridSize()
+        startDisplayLink()
         startBlinkTimer()
         renderFrame()
     }
@@ -123,6 +138,37 @@ class EditorView: NSView {
         let cols = max(1, Int(floor(usableW / cellW)))
         let rows = max(1, Int(floor(usableH / cellH)))
         surface.editorResize(rows: rows, cols: cols)
+    }
+
+    // MARK: - VSync Display Link
+
+    /// Start a CVDisplayLink that fires on each VSync. The callback checks
+    /// dirty flags and renders only when content or cursor state has changed.
+    private func startDisplayLink() {
+        guard displayLink == nil else { return }
+        var dl: CVDisplayLink?
+        CVDisplayLinkCreateWithActiveCGDisplays(&dl)
+        guard let dl else { return }
+
+        let callback: CVDisplayLinkOutputCallback = { _, _, _, _, _, userInfo in
+            guard let userInfo else { return kCVReturnSuccess }
+            let view = Unmanaged<EditorView>.fromOpaque(userInfo).takeUnretainedValue()
+            let dirty = view.editorDirty || view.cursorDirty
+            if dirty {
+                DispatchQueue.main.async { [weak view] in
+                    guard let view else { return }
+                    view.editorDirty = false
+                    view.cursorDirty = false
+                    view.renderFrame()
+                }
+            }
+            return kCVReturnSuccess
+        }
+
+        let userInfo = Unmanaged.passUnretained(self).toOpaque()
+        CVDisplayLinkSetOutputCallback(dl, callback, userInfo)
+        CVDisplayLinkStart(dl)
+        displayLink = dl
     }
 
     // MARK: - Rendering
@@ -198,7 +244,7 @@ class EditorView: NSView {
 
         surface.editorSetScrollOffset(vOffset)
         surface.editorSetHScrollOffset(hOffset)
-        renderFrame()
+        editorDirty = true
     }
 
     // MARK: - Input Handling
@@ -208,13 +254,40 @@ class EditorView: NSView {
         if event.modifierFlags.contains(.command),
            let chars = event.charactersIgnoringModifiers {
             switch chars {
+            case "f":
+                // Cmd+F — open search overlay
+                surface.editorSearchOpen()
+                resetCursorBlink()
+                editorDirty = true
+                return
+            case "g":
+                // Cmd+G / Cmd+Shift+G — next/prev match (falls through to search key handler)
+                if surface.editorSearchActive {
+                    let (key, mods) = CottySurface.translateKeyEvent(event)
+                    guard key != 0 else { return }
+                    _ = surface.editorSearchKey(key, mods: mods)
+                    drainActions()
+                    resetCursorBlink()
+                    editorDirty = true
+                    return
+                }
+            case "h":
+                // Cmd+Shift+H — toggle replace (when search active)
+                if surface.editorSearchActive, event.modifierFlags.contains(.shift) {
+                    let (key, mods) = CottySurface.translateKeyEvent(event)
+                    guard key != 0 else { return }
+                    _ = surface.editorSearchKey(key, mods: mods)
+                    drainActions()
+                    editorDirty = true
+                    return
+                }
             case "v":
                 // Cmd+V — smart paste (single transaction, indent-aware, linewise-aware)
                 if let text = NSPasteboard.general.string(forType: .string) {
                     surface.editorPaste(text)
                     drainActions()
                     resetCursorBlink()
-                    renderFrame()
+                    editorDirty = true
                 }
                 return
             case "c":
@@ -227,18 +300,18 @@ class EditorView: NSView {
                 surface.editorCut()
                 drainActions()
                 resetCursorBlink()
-                renderFrame()
+                editorDirty = true
                 return
             case "a":
                 // Cmd+A — select all
                 surface.editorSelectAll()
-                renderFrame()
+                editorDirty = true
                 return
             case "d":
                 // Cmd+D — add next occurrence (multi-cursor)
                 surface.editorAddNextOccurrence()
                 resetCursorBlink()
-                renderFrame()
+                editorDirty = true
                 return
             default:
                 // Cmd+Arrow/Backspace — forward to Cot (line/doc movement)
@@ -255,10 +328,20 @@ class EditorView: NSView {
         let (key, mods) = CottySurface.translateKeyEvent(event)
         guard key != 0 else { return }
 
+        // Route keys through search overlay when active
+        if surface.editorSearchActive {
+            if surface.editorSearchKey(key, mods: mods) {
+                drainActions()
+                resetCursorBlink()
+                editorDirty = true
+                return
+            }
+        }
+
         surface.sendKey(key, mods: mods)
         drainActions()
         resetCursorBlink()
-        renderFrame()
+        editorDirty = true
     }
 
     // MARK: - Action Queue
@@ -301,7 +384,7 @@ class EditorView: NSView {
             self.cursorBlinkOn.toggle()
             self.surface.editorSetCursorVisible(self.cursorBlinkOn)
             self.surface.editorRebuild()
-            self.renderFrame()
+            self.cursorDirty = true  // VSync callback will pick this up
         }
     }
 
@@ -313,7 +396,7 @@ class EditorView: NSView {
     // MARK: - Public API
 
     func resetScroll() {
-        renderFrame()
+        editorDirty = true
     }
 
     /// Convert a point in view coordinates to grid (row, col).
@@ -346,14 +429,14 @@ class EditorView: NSView {
             }
         }
         resetCursorBlink()
-        renderFrame()
+        editorDirty = true
     }
 
     override func mouseDragged(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         let (row, col) = gridPosition(from: point)
         surface.editorDrag(row: row, col: col)
-        renderFrame()
+        editorDirty = true
     }
 }
 

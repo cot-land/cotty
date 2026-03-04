@@ -530,6 +530,37 @@ final class CottySurface {
         Int(cotty_editor_cursor_count(handle))
     }
 
+    // MARK: - Search & Replace
+
+    func editorSearchOpen() {
+        cotty_editor_search_open(handle)
+    }
+
+    func editorSearchClose() {
+        cotty_editor_search_close(handle)
+    }
+
+    /// Send a key to the search overlay. Returns true if the key was consumed.
+    func editorSearchKey(_ key: Int64, mods: Int64) -> Bool {
+        cotty_editor_search_key(handle, key, mods) != 0
+    }
+
+    var editorSearchActive: Bool {
+        cotty_editor_search_active(handle) != 0
+    }
+
+    func editorSearchToggleReplace() {
+        cotty_editor_search_toggle_replace(handle)
+    }
+
+    func editorSearchReplace() {
+        cotty_editor_search_replace(handle)
+    }
+
+    func editorSearchReplaceAll() {
+        cotty_editor_search_replace_all(handle)
+    }
+
     // MARK: - Convenience
 
     var bufferContent: String {

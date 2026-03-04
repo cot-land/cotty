@@ -367,4 +367,13 @@ int64_t cotty_filetree_row_is_expanded(cotty_filetree_t tree, int64_t row);
 int64_t cotty_filetree_row_path(cotty_filetree_t tree, int64_t row);
 int64_t cotty_filetree_row_path_len(cotty_filetree_t tree, int64_t row);
 
+// Search & Replace
+void cotty_editor_search_open(cotty_surface_t surface);
+void cotty_editor_search_close(cotty_surface_t surface);
+int64_t cotty_editor_search_key(cotty_surface_t surface, int64_t key, int64_t mods);
+int64_t cotty_editor_search_active(cotty_surface_t surface);
+void cotty_editor_search_toggle_replace(cotty_surface_t surface);
+void cotty_editor_search_replace(cotty_surface_t surface);
+void cotty_editor_search_replace_all(cotty_surface_t surface);
+
 #endif
