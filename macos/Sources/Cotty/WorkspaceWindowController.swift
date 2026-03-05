@@ -94,17 +94,15 @@ class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NSSplitVi
         }
     }
 
-    /// Compute the display title for a tab. For editor tabs, includes dirty prefix
-    /// and uses the Swift-side file path for the last path component.
+    /// Compute the display title for a tab. For editor tabs, uses the Swift-side
+    /// file path for the last path component. Dirty prefix is handled by TabButton.
     private func tabDisplayTitle(at index: Int) -> String {
         if workspace.tabIsTerminal(at: index) {
             return workspace.tabTitle(at: index)
         }
         // Editor tab: prefer Swift-side file path for the title
         let handle = workspace.tabSurface(at: index)
-        let name = filePathsBySurface[handle]?.lastPathComponent ?? "Untitled"
-        let dirty = workspace.tabIsDirty(at: index)
-        return dirty ? "\u{25CF} \(name)" : name
+        return filePathsBySurface[handle]?.lastPathComponent ?? "Untitled"
     }
 
     private func reloadTabBar() {
@@ -326,6 +324,39 @@ class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NSSplitVi
 
     func closeTab(at index: Int) {
         guard index >= 0, index < workspace.tabCount else { return }
+
+        // Prompt if editor tab has unsaved changes
+        if !workspace.tabIsTerminal(at: index), workspace.tabIsDirty(at: index) {
+            let title = tabDisplayTitle(at: index)
+            let alert = NSAlert()
+            alert.messageText = "Do you want to save the changes to \(title)?"
+            alert.informativeText = "Your changes will be lost if you don't save them."
+            alert.addButton(withTitle: "Save")
+            alert.addButton(withTitle: "Don't Save")
+            alert.addButton(withTitle: "Cancel")
+            alert.alertStyle = .warning
+            let response = alert.runModal()
+            switch response {
+            case .alertFirstButtonReturn:
+                // Save then close
+                let handle = workspace.tabSurface(at: index)
+                if let path = filePathsBySurface[handle] {
+                    saveToFile(path, surfaceHandle: handle)
+                } else {
+                    // No file path yet — show Save As panel
+                    let panel = NSSavePanel()
+                    panel.nameFieldStringValue = "Untitled.cot"
+                    let response2 = panel.runModal()
+                    guard response2 == .OK, let url = panel.url else { return }
+                    saveToFile(url, surfaceHandle: handle)
+                }
+            case .alertSecondButtonReturn:
+                break  // discard changes
+            default:
+                return  // cancel — don't close
+            }
+        }
+
         let surfaceHandle = workspace.tabSurface(at: index)
 
         // Remove view
@@ -438,7 +469,8 @@ class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NSSplitVi
         let idx = workspace.selectedIndex
         guard idx >= 0 else { return }
         let title = tabDisplayTitle(at: idx)
-        window?.title = title
+        let dirty = !workspace.tabIsTerminal(at: idx) && workspace.tabIsDirty(at: idx)
+        window?.title = dirty ? "\u{25CF} \(title)" : title
         reloadTabBar()
     }
 

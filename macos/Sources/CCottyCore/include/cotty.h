@@ -108,6 +108,12 @@ void cotty_editor_add_cursor(cotty_surface_t surface, int64_t row, int64_t col);
 void cotty_editor_add_next_occurrence(cotty_surface_t surface);
 int64_t cotty_editor_cursor_count(cotty_surface_t surface);
 
+// Phase 1 editor actions (called from Swift shortcuts)
+void cotty_editor_goto_line(cotty_surface_t surface, int64_t line_num);
+void cotty_editor_delete_line(cotty_surface_t surface);
+void cotty_editor_duplicate_line(cotty_surface_t surface);
+void cotty_editor_select_line_action(cotty_surface_t surface);
+
 // Terminal surface lifecycle
 cotty_surface_t cotty_terminal_surface_new(cotty_app_t app, int64_t rows, int64_t cols);
 void cotty_terminal_surface_free(cotty_surface_t surface);

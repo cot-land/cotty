@@ -303,6 +303,11 @@ class EditorView: NSView {
                     editorDirty = true
                     return
                 }
+                // Cmd+G without search — go to line dialog
+                if !event.modifierFlags.contains(.shift) {
+                    showGoToLineDialog()
+                    return
+                }
             case "h":
                 // Cmd+Shift+H — toggle replace (when search active)
                 if surface.editorSearchActive, event.modifierFlags.contains(.shift) {
@@ -340,9 +345,32 @@ class EditorView: NSView {
                 editorDirty = true
                 return
             case "d":
+                if event.modifierFlags.contains(.shift) {
+                    // Cmd+Shift+D — duplicate line
+                    resetCursorBlink()
+                    surface.editorDuplicateLine()
+                    drainActions()
+                    editorDirty = true
+                    return
+                }
                 // Cmd+D — add next occurrence (multi-cursor)
                 resetCursorBlink()
                 surface.editorAddNextOccurrence()
+                editorDirty = true
+                return
+            case "k":
+                if event.modifierFlags.contains(.shift) {
+                    // Cmd+Shift+K — delete line
+                    resetCursorBlink()
+                    surface.editorDeleteLine()
+                    drainActions()
+                    editorDirty = true
+                    return
+                }
+            case "l":
+                // Cmd+L — select line
+                resetCursorBlink()
+                surface.editorSelectLineAction()
                 editorDirty = true
                 return
             default:
@@ -429,6 +457,25 @@ class EditorView: NSView {
     }
 
     // MARK: - Public API
+
+    /// Show a "Go to Line" dialog (Cmd+G when search is not active).
+    private func showGoToLineDialog() {
+        let alert = NSAlert()
+        alert.messageText = "Go to Line"
+        alert.informativeText = "Enter a line number:"
+        alert.addButton(withTitle: "Go")
+        alert.addButton(withTitle: "Cancel")
+        let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 200, height: 24))
+        input.placeholderString = "Line number"
+        alert.accessoryView = input
+        alert.window.initialFirstResponder = input
+        let response = alert.runModal()
+        if response == .alertFirstButtonReturn, let lineNum = Int(input.stringValue), lineNum > 0 {
+            resetCursorBlink()
+            surface.editorGotoLine(lineNum)
+            editorDirty = true
+        }
+    }
 
     func resetScroll() {
         ignoreScrollUpdate = true

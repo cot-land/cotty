@@ -539,6 +539,24 @@ final class CottySurface {
         Int(cotty_editor_cursor_count(handle))
     }
 
+    // MARK: - Phase 1 Editor Actions
+
+    func editorGotoLine(_ lineNum: Int) {
+        cotty_editor_goto_line(handle, Int64(lineNum))
+    }
+
+    func editorDeleteLine() {
+        cotty_editor_delete_line(handle)
+    }
+
+    func editorDuplicateLine() {
+        cotty_editor_duplicate_line(handle)
+    }
+
+    func editorSelectLineAction() {
+        cotty_editor_select_line_action(handle)
+    }
+
     // MARK: - Search & Replace
 
     func editorSearchOpen() {
