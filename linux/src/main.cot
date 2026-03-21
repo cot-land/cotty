@@ -34,6 +34,12 @@ var g_cursor_visible: i64 = 1
 var g_cursor_blink_counter: i64 = 0
 var g_mouse_pressed: i64 = 0
 var g_read_buf: i64 = 0
+var g_tab_bar: i64 = 0
+var g_content_paned: i64 = 0
+var g_sidebar: i64 = 0
+var g_status_bar: i64 = 0
+var g_mode_label: i64 = 0
+var g_pos_label: i64 = 0
 var g_grid_row: i64 = 0
 var g_grid_col: i64 = 0
 
@@ -80,14 +86,40 @@ fn onActivate(app: i64, user_data: i64) void {
 
     g_window = gtk_application_window_new(app)
     gtk_window_set_title(g_window, @ptrOf("Cotty"))
-    gtk_window_set_default_size(g_window, 800, 600)
+    gtk_window_set_default_size(g_window, 1200, 800)
 
+    // Main vertical layout: tab bar → separator → content → separator → status bar
+    const vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0)
+
+    // Tab bar (Phase 2 — placeholder for now)
+    g_tab_bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4)
+    gtk_widget_set_size_request(g_tab_bar, -1, 36)
+    const tab_label = gtk_label_new(@ptrOf("  Terminal"))
+    gtk_box_append(g_tab_bar, tab_label)
+    gtk_box_append(vbox, g_tab_bar)
+    gtk_box_append(vbox, gtk_separator_new(GTK_ORIENTATION_HORIZONTAL))
+
+    // Content area: sidebar (hidden) + GL area
+    g_content_paned = gtk_paned_new(GTK_ORIENTATION_HORIZONTAL)
+    gtk_widget_set_vexpand(g_content_paned, 1)
+
+    // Sidebar (Phase 4 — hidden initially)
+    g_sidebar = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0)
+    gtk_widget_set_size_request(g_sidebar, 220, -1)
+    gtk_widget_set_visible(g_sidebar, 0)
+    gtk_paned_set_start_child(g_content_paned, g_sidebar)
+    gtk_paned_set_shrink_start_child(g_content_paned, 0)
+    gtk_paned_set_resize_start_child(g_content_paned, 0)
+
+    // GL area (terminal/editor rendering)
     const gl_area = gtk_gl_area_new()
     g_gl_area = gl_area
     gtk_gl_area_set_required_version(gl_area, 3, 3)
     gtk_gl_area_set_auto_render(gl_area, 0)
     gtk_widget_set_focusable(gl_area, 1)
     gtk_widget_set_focus_on_click(gl_area, 1)
+    gtk_widget_set_vexpand(gl_area, 1)
+    gtk_widget_set_hexpand(gl_area, 1)
 
     g_signal_connect_data(gl_area, @ptrOf("realize"), @ptrToInt(onRealize), 0, 0, 0)
     g_signal_connect_data(gl_area, @ptrOf("render"), @ptrToInt(onRender), 0, 0, 0)
@@ -101,7 +133,26 @@ fn onActivate(app: i64, user_data: i64) void {
     cotty_input_set_callbacks(@ptrToInt(onMousePress), @ptrToInt(onMouseRelease), @ptrToInt(onMouseMotion), @ptrToInt(onScroll))
     cotty_setup_input(gl_area)
 
-    gtk_window_set_child(g_window, gl_area)
+    gtk_paned_set_end_child(g_content_paned, gl_area)
+    gtk_paned_set_resize_end_child(g_content_paned, 1)
+    gtk_box_append(vbox, g_content_paned)
+
+    gtk_box_append(vbox, gtk_separator_new(GTK_ORIENTATION_HORIZONTAL))
+
+    // Status bar (Phase 3 — static placeholder)
+    g_status_bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8)
+    gtk_widget_set_size_request(g_status_bar, -1, 28)
+    g_mode_label = gtk_label_new(@ptrOf("  TERMINAL"))
+    g_pos_label = gtk_label_new(@ptrOf(""))
+    gtk_widget_set_hexpand(g_mode_label, 1)
+    gtk_widget_set_halign(g_mode_label, GTK_ALIGN_START)
+    gtk_widget_set_halign(g_pos_label, GTK_ALIGN_END)
+    gtk_box_append(g_status_bar, g_mode_label)
+    gtk_box_append(g_status_bar, g_pos_label)
+    gtk_box_append(vbox, g_status_bar)
+
+    // Set layout as window content
+    gtk_window_set_child(g_window, vbox)
     gtk_window_present(g_window)
     gtk_widget_grab_focus(gl_area)
 

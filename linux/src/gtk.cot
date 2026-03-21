@@ -31,6 +31,43 @@ extern fn gtk_widget_get_native(widget: i64) i64
 extern fn gtk_native_get_surface(native: i64) i64
 extern fn gdk_surface_get_scale_factor(surface: i64) i64
 
+// GTK Box (layout containers)
+extern fn gtk_box_new(orientation: i64, spacing: i64) i64
+extern fn gtk_box_append(box: i64, child: i64) void
+
+// GTK Paned (resizable split)
+extern fn gtk_paned_new(orientation: i64) i64
+extern fn gtk_paned_set_start_child(paned: i64, child: i64) void
+extern fn gtk_paned_set_end_child(paned: i64, child: i64) void
+extern fn gtk_paned_set_position(paned: i64, position: i64) void
+extern fn gtk_paned_set_shrink_start_child(paned: i64, shrink: i64) void
+extern fn gtk_paned_set_resize_start_child(paned: i64, resize: i64) void
+extern fn gtk_paned_set_resize_end_child(paned: i64, resize: i64) void
+
+// GTK Separator
+extern fn gtk_separator_new(orientation: i64) i64
+
+// GTK Label
+extern fn gtk_label_new(text: i64) i64
+extern fn gtk_label_set_text(label: i64, text: i64) void
+
+// GTK Button
+extern fn gtk_button_new_with_label(label: i64) i64
+
+// Widget sizing and expansion
+extern fn gtk_widget_set_size_request(widget: i64, width: i64, height: i64) void
+extern fn gtk_widget_set_vexpand(widget: i64, expand: i64) void
+extern fn gtk_widget_set_hexpand(widget: i64, expand: i64) void
+extern fn gtk_widget_set_visible(widget: i64, visible: i64) void
+extern fn gtk_widget_set_halign(widget: i64, align: i64) void
+
+const GTK_ORIENTATION_HORIZONTAL: i64 = 0
+const GTK_ORIENTATION_VERTICAL: i64 = 1
+const GTK_ALIGN_FILL: i64 = 0
+const GTK_ALIGN_START: i64 = 1
+const GTK_ALIGN_END: i64 = 2
+const GTK_ALIGN_CENTER: i64 = 3
+
 // GTK GL Area
 extern fn gtk_gl_area_new() i64
 extern fn gtk_gl_area_make_current(area: i64) void
