@@ -743,8 +743,31 @@ class MetalRenderer {
                     ))
                 }
 
-                // Selection overlay (between background and foreground)
                 let flags = cellPtr.load(fromByteOffset: 40, as: Int64.self)
+
+                // Current line highlight (subtle, behind everything else)
+                if flags & 262144 != 0 {  // CELL_CURRENT_LINE
+                    cells.append(CellData(
+                        gridX: UInt16(col), gridY: UInt16(row),
+                        atlasX: solid.atlasX, atlasY: solid.atlasY,
+                        glyphW: solid.width, glyphH: solid.height,
+                        offX: 0, offY: 0,
+                        r: 0xFF, g: 0xFF, b: 0xFF, a: 0x0A
+                    ))
+                }
+
+                // Word occurrence highlight
+                if flags & 524288 != 0 {  // CELL_WORD_HIGHLIGHT
+                    cells.append(CellData(
+                        gridX: UInt16(col), gridY: UInt16(row),
+                        atlasX: solid.atlasX, atlasY: solid.atlasY,
+                        glyphW: solid.width, glyphH: solid.height,
+                        offX: 0, offY: 0,
+                        r: 0x80, g: 0x80, b: 0x40, a: 0x40
+                    ))
+                }
+
+                // Selection overlay (between background and foreground)
                 if flags & 8 != 0 {  // CELL_SELECTED
                     cells.append(CellData(
                         gridX: UInt16(col), gridY: UInt16(row),

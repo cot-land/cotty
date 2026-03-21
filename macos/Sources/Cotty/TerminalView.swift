@@ -118,7 +118,9 @@ class TerminalView: NSView {
         startNotifyMonitor()
         startDisplayLink()
         if isFocused { startBlinkTimer() }
+        print("[cotty-swift] initial renderFrame, bounds=\(bounds)")
         renderFrame()
+        print("[cotty-swift] initial renderFrame done")
     }
 
     override func viewDidChangeBackingProperties() {

@@ -194,6 +194,86 @@ class FileTreeView: NSView {
         )
         addTrackingArea(area)
     }
+
+    // MARK: - Context Menu
+
+    override func rightMouseDown(with event: NSEvent) {
+        let pt = contentView.convert(event.locationInWindow, from: nil)
+        let row = rowAt(point: pt)
+        if row >= 0 {
+            fileTree?.selectRow(row)
+            contentView.needsDisplay = true
+        }
+
+        let menu = NSMenu()
+        let newFileItem = NSMenuItem(title: "New File…", action: #selector(contextNewFile(_:)), keyEquivalent: "")
+        newFileItem.target = self
+        newFileItem.tag = row
+        menu.addItem(newFileItem)
+
+        let newDirItem = NSMenuItem(title: "New Folder…", action: #selector(contextNewDir(_:)), keyEquivalent: "")
+        newDirItem.target = self
+        newDirItem.tag = row
+        menu.addItem(newDirItem)
+
+        if row >= 0, let ft = fileTree, !ft.rowIsDir(at: row) {
+            menu.addItem(NSMenuItem.separator())
+            let deleteItem = NSMenuItem(title: "Delete", action: #selector(contextDelete(_:)), keyEquivalent: "")
+            deleteItem.target = self
+            deleteItem.tag = row
+            menu.addItem(deleteItem)
+        }
+
+        NSMenu.popUpContextMenu(menu, with: event, for: self)
+    }
+
+    @objc private func contextNewFile(_ sender: NSMenuItem) {
+        promptForName(title: "New File", row: sender.tag) { [weak self] name in
+            guard let self, let ft = self.fileTree else { return }
+            ft.createFile(at: sender.tag, name: name)
+            self.updateContentSize()
+            self.contentView.needsDisplay = true
+        }
+    }
+
+    @objc private func contextNewDir(_ sender: NSMenuItem) {
+        promptForName(title: "New Folder", row: sender.tag) { [weak self] name in
+            guard let self, let ft = self.fileTree else { return }
+            ft.createDir(at: sender.tag, name: name)
+            self.updateContentSize()
+            self.contentView.needsDisplay = true
+        }
+    }
+
+    @objc private func contextDelete(_ sender: NSMenuItem) {
+        guard let ft = fileTree else { return }
+        let name = ft.rowName(at: sender.tag)
+        let alert = NSAlert()
+        alert.messageText = "Delete \"\(name)\"?"
+        alert.informativeText = "This cannot be undone."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        ft.deleteEntry(at: sender.tag)
+        updateContentSize()
+        contentView.needsDisplay = true
+    }
+
+    private func promptForName(title: String, row: Int, completion: @escaping (String) -> Void) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.addButton(withTitle: "Create")
+        alert.addButton(withTitle: "Cancel")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        field.placeholderString = "Name"
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let name = field.stringValue.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { return }
+        completion(name)
+    }
 }
 
 // MARK: - Content View (flipped, custom draw)

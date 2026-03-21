@@ -557,6 +557,22 @@ final class CottySurface {
         cotty_editor_select_line_action(handle)
     }
 
+    /// Prepare buffer for save: trim trailing whitespace, ensure final newline.
+    /// Returns true if buffer was modified.
+    @discardableResult
+    func editorPrepareSave() -> Bool {
+        cotty_editor_prepare_save(handle) != 0
+    }
+
+    func editorToggleComment() {
+        cotty_editor_toggle_comment(handle)
+    }
+
+    @discardableResult
+    func editorRevert() -> Bool {
+        cotty_editor_revert(handle) != 0
+    }
+
     // MARK: - Search & Replace
 
     func editorSearchOpen() {

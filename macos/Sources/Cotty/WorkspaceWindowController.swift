@@ -36,6 +36,15 @@ class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NSSplitVi
     // Theme selector overlay
     private var themeSelectorView: ThemeSelectorView?
 
+    // File finder overlay
+    private var fileFinderView: FileFinderView?
+
+    // Project search overlay
+    private var projectSearchView: ProjectSearchView?
+
+    // Auto-save timer (fires every 5 seconds for dirty editor tabs with file paths)
+    private var autoSaveTimer: Timer?
+
     private static var cascadePoint = NSPoint.zero
 
     // MARK: - Init
@@ -49,6 +58,9 @@ class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NSSplitVi
         syncSidebarFromState()
         Self.cascadePoint = window.cascadeTopLeft(from: Self.cascadePoint)
         window.makeKeyAndOrderFront(nil)
+        autoSaveTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
+            self?.autoSaveDirtyTabs()
+        }
     }
 
     @available(*, unavailable)
@@ -280,7 +292,11 @@ class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NSSplitVi
             rebuildSplitLayout()
         } else {
             let surfaceHandle = workspace.tabSurface(at: index)
-            guard let view = viewsBySurface[surfaceHandle] else { return }
+            print("[cotty-swift] selectTab: index=\(index) surfaceHandle=\(surfaceHandle) viewCount=\(viewsBySurface.count)")
+            guard let view = viewsBySurface[surfaceHandle] else {
+                print("[cotty-swift] ERROR: no view for surfaceHandle=\(surfaceHandle), keys=\(Array(viewsBySurface.keys))")
+                return
+            }
 
             if view.superview !== contentContainer {
                 contentContainer.addSubview(view)
@@ -653,6 +669,7 @@ class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NSSplitVi
 
     private func saveToFile(_ url: URL, surfaceHandle: cotty_surface_t) {
         guard let surface = surfacesBySurface[surfaceHandle] else { return }
+        surface.editorPrepareSave()
         let content = surface.bufferContent
         do {
             try content.write(to: url, atomically: true, encoding: .utf8)
@@ -807,6 +824,73 @@ class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NSSplitVi
 
     func themeSelectorDidDismiss() {
         window?.makeFirstResponder(selectedView)
+    }
+
+    // MARK: - File Finder
+
+    @objc func toggleFileFinder(_ sender: Any?) {
+        if let fv = fileFinderView, !fv.isHidden {
+            fv.dismiss()
+            return
+        }
+        guard let rootURL = workspace.rootURL else { return }
+        if fileFinderView == nil {
+            let fv = FileFinderView(frame: .zero)
+            fv.workspaceController = self
+            window?.contentView?.addSubview(fv)
+            fileFinderView = fv
+        }
+        fileFinderView?.show(rootPath: rootURL.path)
+    }
+
+    func fileFinderDidDismiss() {
+        window?.makeFirstResponder(selectedView)
+    }
+
+    func openFileFromFinder(_ url: URL) {
+        openFileInTab(url)
+    }
+
+    // MARK: - Project Search
+
+    @objc func toggleProjectSearch(_ sender: Any?) {
+        if let pv = projectSearchView, !pv.isHidden {
+            pv.dismiss()
+            return
+        }
+        guard let rootURL = workspace.rootURL else { return }
+        if projectSearchView == nil {
+            let pv = ProjectSearchView(frame: .zero)
+            pv.workspaceController = self
+            window?.contentView?.addSubview(pv)
+            projectSearchView = pv
+        }
+        projectSearchView?.show(rootPath: rootURL.path)
+    }
+
+    func projectSearchDidDismiss() {
+        window?.makeFirstResponder(selectedView)
+    }
+
+    func openFileFromSearch(_ url: URL, lineNum: Int) {
+        openFileInTab(url)
+        // Navigate to the line after opening
+        if let surface = selectedSurface {
+            surface.editorGotoLine(lineNum)
+            selectedView?.needsDisplay = true
+        }
+    }
+
+    /// Open a file in a tab, reusing an existing tab if already open.
+    private func openFileInTab(_ url: URL) {
+        for i in 0..<workspace.tabCount {
+            let handle = workspace.tabSurface(at: i)
+            if filePathsBySurface[handle] == url {
+                selectTab(at: i)
+                return
+            }
+        }
+        addEditorTab(fileURL: url)
     }
 
     /// Refresh Theme.shared from already-updated FFI config (no disk reload) and rebuild views.
@@ -1032,8 +1116,20 @@ class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NSSplitVi
     }
 
     func windowWillClose(_ notification: Notification) {
+        autoSaveTimer?.invalidate()
+        autoSaveTimer = nil
         if let delegate = NSApp.delegate as? AppDelegate {
             delegate.workspaceControllerDidClose(self)
+        }
+    }
+
+    /// Auto-save all dirty editor tabs that have a file path.
+    private func autoSaveDirtyTabs() {
+        for i in 0..<workspace.tabCount {
+            guard workspace.tabIsDirty(at: i), !workspace.tabIsTerminal(at: i) else { continue }
+            let handle = workspace.tabSurface(at: i)
+            guard let url = filePathsBySurface[handle] else { continue }
+            saveToFile(url, surfaceHandle: handle)
         }
     }
 }

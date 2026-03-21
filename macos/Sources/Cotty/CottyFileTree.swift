@@ -65,4 +65,23 @@ final class CottyFileTree {
         let data = Data(bytes: UnsafeRawPointer(bitPattern: Int(ptr))!, count: Int(len))
         return String(data: data, encoding: .utf8) ?? ""
     }
+
+    @discardableResult
+    func deleteEntry(at row: Int) -> Bool {
+        cotty_filetree_delete(handle, Int64(row)) == 0
+    }
+
+    @discardableResult
+    func createFile(at row: Int, name: String) -> Bool {
+        name.utf8.withContiguousStorageIfAvailable { buf in
+            cotty_filetree_create_file(handle, Int64(row), Int64(Int(bitPattern: buf.baseAddress)), Int64(buf.count))
+        }! == 0
+    }
+
+    @discardableResult
+    func createDir(at row: Int, name: String) -> Bool {
+        name.utf8.withContiguousStorageIfAvailable { buf in
+            cotty_filetree_create_dir(handle, Int64(row), Int64(Int(bitPattern: buf.baseAddress)), Int64(buf.count))
+        }! == 0
+    }
 }

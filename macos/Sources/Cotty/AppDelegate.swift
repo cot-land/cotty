@@ -168,6 +168,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let themeItem = NSMenuItem(title: "Theme Selector", action: #selector(WorkspaceWindowController.showThemeSelector(_:)), keyEquivalent: "T")
         themeItem.keyEquivalentModifierMask = [.command, .shift]
         viewMenu.addItem(themeItem)
+        viewMenu.addItem(withTitle: "Go to File…", action: #selector(WorkspaceWindowController.toggleFileFinder(_:)), keyEquivalent: "p")
+        let searchProjectItem = NSMenuItem(title: "Search in Project…", action: #selector(WorkspaceWindowController.toggleProjectSearch(_:)), keyEquivalent: "F")
+        searchProjectItem.keyEquivalentModifierMask = [.command, .shift]
+        viewMenu.addItem(searchProjectItem)
         viewMenu.addItem(.separator())
         viewMenu.addItem(withTitle: "Increase Font Size", action: #selector(WorkspaceWindowController.increaseFontSize(_:)), keyEquivalent: "=")
         viewMenu.addItem(withTitle: "Decrease Font Size", action: #selector(WorkspaceWindowController.decreaseFontSize(_:)), keyEquivalent: "-")

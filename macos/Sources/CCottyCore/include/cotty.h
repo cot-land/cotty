@@ -113,6 +113,9 @@ void cotty_editor_goto_line(cotty_surface_t surface, int64_t line_num);
 void cotty_editor_delete_line(cotty_surface_t surface);
 void cotty_editor_duplicate_line(cotty_surface_t surface);
 void cotty_editor_select_line_action(cotty_surface_t surface);
+int64_t cotty_editor_prepare_save(cotty_surface_t surface);
+void cotty_editor_toggle_comment(cotty_surface_t surface);
+int64_t cotty_editor_revert(cotty_surface_t surface);
 
 // Terminal surface lifecycle
 cotty_surface_t cotty_terminal_surface_new(cotty_app_t app, int64_t rows, int64_t cols);
@@ -374,6 +377,47 @@ int64_t cotty_filetree_row_is_dir(cotty_filetree_t tree, int64_t row);
 int64_t cotty_filetree_row_is_expanded(cotty_filetree_t tree, int64_t row);
 int64_t cotty_filetree_row_path(cotty_filetree_t tree, int64_t row);
 int64_t cotty_filetree_row_path_len(cotty_filetree_t tree, int64_t row);
+
+// File Finder
+void cotty_file_finder_open(int64_t root_ptr, int64_t root_len);
+void cotty_file_finder_close(void);
+int64_t cotty_file_finder_active(void);
+void cotty_file_finder_set_query(const uint8_t *ptr, int64_t len);
+int64_t cotty_file_finder_result_count(void);
+int64_t cotty_file_finder_result_name(int64_t index);
+int64_t cotty_file_finder_result_name_len(int64_t index);
+int64_t cotty_file_finder_result_path(int64_t index);
+int64_t cotty_file_finder_result_path_len(int64_t index);
+int64_t cotty_file_finder_selected(void);
+void cotty_file_finder_move_up(void);
+void cotty_file_finder_move_down(void);
+
+// Project Search
+void cotty_project_search_open(int64_t root_ptr, int64_t root_len);
+void cotty_project_search_close(void);
+int64_t cotty_project_search_active(void);
+void cotty_project_search_set_query(const uint8_t *ptr, int64_t len);
+int64_t cotty_project_search_file_count(void);
+int64_t cotty_project_search_total_matches(void);
+int64_t cotty_project_search_flat_count(void);
+int64_t cotty_project_search_selected(void);
+void cotty_project_search_move_up(void);
+void cotty_project_search_move_down(void);
+int64_t cotty_project_search_file_rel_path(int64_t file_idx);
+int64_t cotty_project_search_file_rel_path_len(int64_t file_idx);
+int64_t cotty_project_search_file_full_path(int64_t file_idx);
+int64_t cotty_project_search_file_full_path_len(int64_t file_idx);
+int64_t cotty_project_search_file_match_count(int64_t file_idx);
+int64_t cotty_project_search_flat_line_num(int64_t flat_idx);
+int64_t cotty_project_search_flat_col(int64_t flat_idx);
+int64_t cotty_project_search_flat_line_text(int64_t flat_idx);
+int64_t cotty_project_search_flat_line_text_len(int64_t flat_idx);
+int64_t cotty_project_search_flat_file_index(int64_t flat_idx);
+
+// File tree operations
+int64_t cotty_filetree_delete(cotty_filetree_t tree, int64_t row);
+int64_t cotty_filetree_create_file(cotty_filetree_t tree, int64_t row, int64_t name_ptr, int64_t name_len);
+int64_t cotty_filetree_create_dir(cotty_filetree_t tree, int64_t row, int64_t name_ptr, int64_t name_len);
 
 // Search & Replace
 void cotty_editor_search_open(cotty_surface_t surface);
