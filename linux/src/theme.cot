@@ -1,0 +1,40 @@
+/// Theme / config values loaded from libcotty FFI.
+
+import "cotty_ffi"
+
+var g_font_name_ptr: i64 = 0
+var g_font_name_len: i64 = 0
+var g_font_size: i64 = 18
+var g_padding: i64 = 8
+var g_bg_r: i64 = 0x0C
+var g_bg_g: i64 = 0x0C
+var g_bg_b: i64 = 0x0C
+var g_fg_r: i64 = 0xD9
+var g_fg_g: i64 = 0xD9
+var g_fg_b: i64 = 0xD9
+var g_cursor_r: i64 = 0xFC
+var g_cursor_g: i64 = 0x97
+var g_cursor_b: i64 = 0x1F
+var g_sel_r: i64 = 0x34
+var g_sel_g: i64 = 0x34
+var g_sel_b: i64 = 0x34
+var g_sel_a: i64 = 0xFF
+
+fn theme_load() void {
+    g_font_name_ptr = cotty_config_font_name()
+    g_font_name_len = cotty_config_font_name_len()
+    g_font_size = cotty_config_font_size()
+    g_padding = cotty_config_padding()
+    g_bg_r = cotty_config_bg_r()
+    g_bg_g = cotty_config_bg_g()
+    g_bg_b = cotty_config_bg_b()
+    g_fg_r = cotty_config_fg_r()
+    g_fg_g = cotty_config_fg_g()
+    g_fg_b = cotty_config_fg_b()
+    g_cursor_r = cotty_config_cursor_r()
+    g_cursor_g = cotty_config_cursor_g()
+    g_cursor_b = cotty_config_cursor_b()
+    g_sel_r = cotty_config_sel_bg_r()
+    g_sel_g = cotty_config_sel_bg_g()
+    g_sel_b = cotty_config_sel_bg_b()
+}

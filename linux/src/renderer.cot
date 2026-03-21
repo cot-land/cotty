@@ -1,0 +1,255 @@
+/// OpenGL cell renderer — instanced rendering of terminal cells.
+/// Port of macos/Sources/Cotty/MetalRenderer.swift.
+/// Cell layout: 11 × i64 (codepoint, fg_r, fg_g, fg_b, bg_r, bg_g, bg_b, flags, ul_r, ul_g, ul_b)
+/// Stride = 88 bytes.
+
+import "gl"
+import "theme"
+import "glyph_atlas"
+import "cotty_ffi"
+
+var g_program: i64 = 0
+var g_vao: i64 = 0
+var g_vbo: i64 = 0
+var g_u_projection: i64 = 0
+var g_u_cell_size: i64 = 0
+var g_u_atlas_size: i64 = 0
+var g_u_padding: i64 = 0
+var g_u_atlas: i64 = 0
+var g_cell_buf: i64 = 0
+var g_cell_count: i64 = 0
+var g_cell_cap: i64 = 0
+const CELL_STRIDE: i64 = 20
+const CELL_DATA_STRIDE: i64 = 88
+
+extern fn cotty_glGetProgramiv(program: i64, pname: i64, params: i64) void
+
+fn compile_shader(type_: i64, src_ptr: i64) i64 {
+    const shader = cotty_glCreateShader(type_)
+    var src = src_ptr
+    cotty_glShaderSource(shader, 1, @ptrToInt(&src), 0)
+    cotty_glCompileShader(shader)
+    return shader
+}
+
+fn create_program() i64 {
+    const vert = compile_shader(GL_VERTEX_SHADER, cotty_gl_vert_shader_src())
+    const frag = compile_shader(GL_FRAGMENT_SHADER, cotty_gl_frag_shader_src())
+    const prog = cotty_glCreateProgram()
+    cotty_glAttachShader(prog, vert)
+    cotty_glAttachShader(prog, frag)
+    cotty_glLinkProgram(prog)
+    cotty_glDeleteShader(vert)
+    cotty_glDeleteShader(frag)
+    return prog
+}
+
+fn renderer_create() void {
+    g_program = create_program()
+    g_u_projection = cotty_glGetUniformLocation(g_program, @ptrOf("u_projection"))
+    g_u_cell_size = cotty_glGetUniformLocation(g_program, @ptrOf("u_cell_size"))
+    g_u_atlas_size = cotty_glGetUniformLocation(g_program, @ptrOf("u_atlas_size"))
+    g_u_padding = cotty_glGetUniformLocation(g_program, @ptrOf("u_padding"))
+    g_u_atlas = cotty_glGetUniformLocation(g_program, @ptrOf("u_atlas"))
+
+    cotty_glGenVertexArrays(1, @ptrToInt(&g_vao))
+    cotty_glGenBuffers(1, @ptrToInt(&g_vbo))
+    cotty_glBindVertexArray(g_vao)
+    cotty_glBindBuffer(GL_ARRAY_BUFFER, g_vbo)
+
+    cotty_glEnableVertexAttribArray(0)
+    cotty_glVertexAttribIPointer(0, 2, GL_UNSIGNED_SHORT, CELL_STRIDE, 0)
+    cotty_glVertexAttribDivisor(0, 1)
+    cotty_glEnableVertexAttribArray(1)
+    cotty_glVertexAttribIPointer(1, 2, GL_UNSIGNED_SHORT, CELL_STRIDE, 4)
+    cotty_glVertexAttribDivisor(1, 1)
+    cotty_glEnableVertexAttribArray(2)
+    cotty_glVertexAttribIPointer(2, 2, GL_UNSIGNED_SHORT, CELL_STRIDE, 8)
+    cotty_glVertexAttribDivisor(2, 1)
+    cotty_glEnableVertexAttribArray(3)
+    cotty_glVertexAttribIPointer(3, 2, GL_SHORT, CELL_STRIDE, 12)
+    cotty_glVertexAttribDivisor(3, 1)
+    cotty_glEnableVertexAttribArray(4)
+    cotty_glVertexAttribPointer(4, 4, GL_UNSIGNED_BYTE, GL_TRUE, CELL_STRIDE, 16)
+    cotty_glVertexAttribDivisor(4, 1)
+
+    cotty_glBindVertexArray(0)
+    g_cell_cap = 8192
+    g_cell_buf = malloc(g_cell_cap * CELL_STRIDE)
+    g_cell_count = 0
+}
+
+fn renderer_begin() void {
+    g_cell_count = 0
+}
+
+fn push_cell(gridX: i64, gridY: i64, atlasX: i64, atlasY: i64,
+             glyphW: i64, glyphH: i64, offX: i64, offY: i64,
+             cr: i64, cg: i64, cb: i64, ca: i64) void {
+    if (g_cell_count >= g_cell_cap) {
+        g_cell_cap = g_cell_cap * 2
+        const new_buf = malloc(g_cell_cap * CELL_STRIDE)
+        _ = memcpy(new_buf, g_cell_buf, g_cell_count * CELL_STRIDE)
+        free(g_cell_buf)
+        g_cell_buf = new_buf
+    }
+    const base = g_cell_buf + g_cell_count * CELL_STRIDE
+    @intToPtr(*u16, base).* = @intCast(u16, gridX)
+    @intToPtr(*u16, base + 2).* = @intCast(u16, gridY)
+    @intToPtr(*u16, base + 4).* = @intCast(u16, atlasX)
+    @intToPtr(*u16, base + 6).* = @intCast(u16, atlasY)
+    @intToPtr(*u16, base + 8).* = @intCast(u16, glyphW)
+    @intToPtr(*u16, base + 10).* = @intCast(u16, glyphH)
+    @intToPtr(*i16, base + 12).* = @intCast(i16, offX)
+    @intToPtr(*i16, base + 14).* = @intCast(i16, offY)
+    @intToPtr(*u8, base + 16).* = @intCast(u8, cr)
+    @intToPtr(*u8, base + 17).* = @intCast(u8, cg)
+    @intToPtr(*u8, base + 18).* = @intCast(u8, cb)
+    @intToPtr(*u8, base + 19).* = @intCast(u8, ca)
+    g_cell_count = g_cell_count + 1
+}
+
+fn renderer_flush(draw_w: i64, draw_h: i64, pad_x: i64, pad_y: i64) void {
+    if (g_cell_count == 0) { return }
+    cotty_glUseProgram(g_program)
+    cotty_gl_set_projection(g_u_projection, draw_w, draw_h)
+    cotty_gl_uniform2f(g_u_cell_size, g_cell_width, g_cell_height)
+    cotty_gl_uniform2f(g_u_atlas_size, g_atlas_width, g_atlas_height)
+    cotty_gl_uniform2f(g_u_padding, pad_x, pad_y)
+    cotty_glActiveTexture(GL_TEXTURE0)
+    cotty_glBindTexture(GL_TEXTURE_2D, g_atlas_tex)
+    cotty_glUniform1i(g_u_atlas, 0)
+    cotty_glBindVertexArray(g_vao)
+    cotty_glBindBuffer(GL_ARRAY_BUFFER, g_vbo)
+    cotty_glBufferData(GL_ARRAY_BUFFER, g_cell_count * CELL_STRIDE, g_cell_buf, GL_STREAM_DRAW)
+    cotty_glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, g_cell_count)
+    cotty_glBindVertexArray(0)
+}
+
+/// Read an i64 field from cell data at the given field index (0-10).
+fn cell_field(cell_ptr: i64, field: i64) i64 {
+    return @intToPtr(*i64, cell_ptr + field * 8).*
+}
+
+fn render_terminal(surface: i64, draw_w: i64, draw_h: i64, scale: i64,
+                   cursor_visible: i64, cursor_shape: i64, focused: i64) void {
+    const pad = g_padding * scale
+    cotty_terminal_lock(surface)
+
+    const cells_ptr = cotty_terminal_cells_ptr(surface)
+    const rows = cotty_terminal_rows(surface)
+    const cols = cotty_terminal_cols(surface)
+    const cursor_row = cotty_terminal_cursor_row(surface)
+    const cursor_col = cotty_terminal_cursor_col(surface)
+
+    if (cells_ptr == 0 or rows == 0 or cols == 0) {
+        cotty_terminal_unlock(surface)
+        cotty_gl_viewport(0, 0, draw_w, draw_h)
+        cotty_gl_clear_color(g_bg_r, g_bg_g, g_bg_b, 255)
+        cotty_glClear(GL_COLOR_BUFFER_BIT)
+        return
+    }
+
+
+    renderer_begin()
+
+    for row in 0..rows {
+        for col in 0..cols {
+            const cp = cells_ptr + (row * cols + col) * CELL_DATA_STRIDE
+            const codepoint = cell_field(cp, 0)
+            var fg_r = cell_field(cp, 1)
+            var fg_g = cell_field(cp, 2)
+            var fg_b = cell_field(cp, 3)
+            var bg_r = cell_field(cp, 4)
+            var bg_g = cell_field(cp, 5)
+            var bg_b = cell_field(cp, 6)
+            const flags = cell_field(cp, 7)
+
+            // Inverse: swap fg/bg
+            if (flags & 4 != 0) {
+                const tr = fg_r; const tg = fg_g; const tb = fg_b
+                fg_r = bg_r; fg_g = bg_g; fg_b = bg_b
+                bg_r = tr; bg_g = tg; bg_b = tb
+            }
+
+            var fg_alpha: i64 = 255
+            if (flags & 16 != 0) { fg_alpha = 128 }
+
+            // Background (if non-default or inverse)
+            if (bg_r != g_bg_r or bg_g != g_bg_g or bg_b != g_bg_b or flags & 4 != 0) {
+                push_cell(col, row, 0, 0, g_cell_width, g_cell_height, 0, 0, bg_r, bg_g, bg_b, 255)
+            }
+
+            // Selection overlay
+            if (flags & 8 != 0) {
+                push_cell(col, row, 0, 0, g_cell_width, g_cell_height, 0, 0, g_sel_r, g_sel_g, g_sel_b, g_sel_a)
+            }
+
+            // Foreground glyph (skip hidden=256, spacer not in current cell layout)
+            if (codepoint >= 32 and flags & 256 == 0) {
+                atlas_lookup_styled(codepoint, flags & 1, flags & 32)
+                push_cell(col, row, g_glyph_ax, g_glyph_ay, g_glyph_w, g_glyph_h, 0, 0, fg_r, fg_g, fg_b, fg_alpha)
+            }
+
+            // Decorations
+            if (flags & 2 != 0 or flags & 1024 != 0 or flags & 64 != 0 or flags & 512 != 0) {
+                var dec_r = fg_r
+                var dec_g = fg_g
+                var dec_b = fg_b
+                if (flags & 2048 != 0) {
+                    dec_r = cell_field(cp, 8)
+                    dec_g = cell_field(cp, 9)
+                    dec_b = cell_field(cp, 10)
+                }
+                var lh = g_cell_height / 14
+                if (lh < 1) { lh = 1 }
+                if (flags & 2 != 0) { push_cell(col, row, 0, 0, g_cell_width, lh, 0, g_cell_height - lh, dec_r, dec_g, dec_b, fg_alpha) }
+                if (flags & 1024 != 0) {
+                    push_cell(col, row, 0, 0, g_cell_width, lh, 0, g_cell_height - lh, dec_r, dec_g, dec_b, fg_alpha)
+                    push_cell(col, row, 0, 0, g_cell_width, lh, 0, g_cell_height - lh - lh - lh, dec_r, dec_g, dec_b, fg_alpha)
+                }
+                if (flags & 64 != 0) { push_cell(col, row, 0, 0, g_cell_width, lh, 0, g_cell_height / 2, dec_r, dec_g, dec_b, fg_alpha) }
+                if (flags & 512 != 0) { push_cell(col, row, 0, 0, g_cell_width, lh, 0, 0, dec_r, dec_g, dec_b, fg_alpha) }
+            }
+        }
+    }
+
+    // Cursor
+    if (cursor_visible != 0 and cursor_row >= 0 and cursor_row < rows and cursor_col >= 0 and cursor_col < cols) {
+        const c_a: i64 = 128
+        if (focused == 0) {
+            var t = g_cell_height / 16
+            if (t < 1) { t = 1 }
+            var tw = g_cell_width / 16
+            if (tw < 1) { tw = 1 }
+            push_cell(cursor_col, cursor_row, 0, 0, g_cell_width, t, 0, 0, g_cursor_r, g_cursor_g, g_cursor_b, c_a)
+            push_cell(cursor_col, cursor_row, 0, 0, g_cell_width, t, 0, g_cell_height - t, g_cursor_r, g_cursor_g, g_cursor_b, c_a)
+            push_cell(cursor_col, cursor_row, 0, 0, tw, g_cell_height, 0, 0, g_cursor_r, g_cursor_g, g_cursor_b, c_a)
+            push_cell(cursor_col, cursor_row, 0, 0, tw, g_cell_height, g_cell_width - tw, 0, g_cursor_r, g_cursor_g, g_cursor_b, c_a)
+        } else {
+            var cw = g_cell_width
+            var ch = g_cell_height
+            var coy: i64 = 0
+            if (cursor_shape == 3 or cursor_shape == 4) {
+                ch = g_cell_height / 8
+                if (ch < 2) { ch = 2 }
+                coy = g_cell_height - ch
+            }
+            if (cursor_shape == 5 or cursor_shape == 6) {
+                cw = g_cell_width / 8
+                if (cw < 2) { cw = 2 }
+                coy = 0
+            }
+            push_cell(cursor_col, cursor_row, 0, 0, cw, ch, 0, coy, g_cursor_r, g_cursor_g, g_cursor_b, c_a)
+        }
+    }
+
+    cotty_terminal_unlock(surface)
+
+    cotty_gl_viewport(0, 0, draw_w, draw_h)
+    cotty_gl_clear_color(g_bg_r, g_bg_g, g_bg_b, 255)
+    cotty_glClear(GL_COLOR_BUFFER_BIT)
+    cotty_glEnable(GL_BLEND)
+    cotty_glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA)
+    renderer_flush(draw_w, draw_h, pad, pad)
+}

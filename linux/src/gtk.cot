@@ -1,0 +1,80 @@
+/// GTK4 / GLib / GDK extern declarations.
+
+// GLib core
+extern fn g_application_run(app: i64, argc: i64, argv: i64) i64
+extern fn g_application_quit(app: i64) void
+extern fn g_object_unref(obj: i64) void
+extern fn g_signal_connect_data(instance: i64, signal: i64, handler: i64, data: i64, destroy: i64, flags: i64) i64
+extern fn g_timeout_add(interval: i64, func: i64, data: i64) i64
+extern fn g_unix_fd_add(fd: i64, condition: i64, func: i64, data: i64) i64
+
+const G_IO_IN: i64 = 1
+
+// GTK Application
+extern fn gtk_application_new(app_id: i64, flags: i64) i64
+extern fn gtk_application_window_new(app: i64) i64
+
+// GTK Window
+extern fn gtk_window_set_title(window: i64, title: i64) void
+extern fn gtk_window_set_default_size(window: i64, width: i64, height: i64) void
+extern fn gtk_window_present(window: i64) void
+extern fn gtk_window_set_child(window: i64, child: i64) void
+
+// GTK Widget
+extern fn gtk_widget_set_focusable(widget: i64, focusable: i64) void
+extern fn gtk_widget_set_focus_on_click(widget: i64, focus: i64) void
+extern fn gtk_widget_get_width(widget: i64) i64
+extern fn gtk_widget_get_height(widget: i64) i64
+extern fn gtk_widget_grab_focus(widget: i64) void
+extern fn gtk_widget_add_controller(widget: i64, controller: i64) void
+extern fn gtk_widget_get_native(widget: i64) i64
+extern fn gtk_native_get_surface(native: i64) i64
+extern fn gdk_surface_get_scale_factor(surface: i64) i64
+
+// GTK GL Area
+extern fn gtk_gl_area_new() i64
+extern fn gtk_gl_area_make_current(area: i64) void
+extern fn gtk_gl_area_set_required_version(area: i64, major: i64, minor: i64) void
+extern fn gtk_gl_area_queue_render(area: i64) void
+extern fn gtk_gl_area_set_auto_render(area: i64, auto_render: i64) void
+
+// GTK Event Controllers
+extern fn gtk_event_controller_key_new() i64
+
+// GDK Key Event
+extern fn gdk_keyval_to_unicode(keyval: i64) i64
+
+// GDK Keysyms
+const GDK_KEY_BackSpace: i64 = 0xff08
+const GDK_KEY_Tab: i64 = 0xff09
+const GDK_KEY_Return: i64 = 0xff0d
+const GDK_KEY_Escape: i64 = 0xff1b
+const GDK_KEY_Delete: i64 = 0xffff
+const GDK_KEY_Home: i64 = 0xff50
+const GDK_KEY_Left: i64 = 0xff51
+const GDK_KEY_Up: i64 = 0xff52
+const GDK_KEY_Right: i64 = 0xff53
+const GDK_KEY_Down: i64 = 0xff54
+const GDK_KEY_Page_Up: i64 = 0xff55
+const GDK_KEY_Page_Down: i64 = 0xff56
+const GDK_KEY_End: i64 = 0xff57
+const GDK_KEY_Insert: i64 = 0xff63
+const GDK_KEY_F1: i64 = 0xffbe
+const GDK_KEY_F2: i64 = 0xffbf
+const GDK_KEY_F3: i64 = 0xffc0
+const GDK_KEY_F4: i64 = 0xffc1
+const GDK_KEY_F5: i64 = 0xffc2
+const GDK_KEY_F6: i64 = 0xffc3
+const GDK_KEY_F7: i64 = 0xffc4
+const GDK_KEY_F8: i64 = 0xffc5
+const GDK_KEY_F9: i64 = 0xffc6
+const GDK_KEY_F10: i64 = 0xffc7
+const GDK_KEY_F11: i64 = 0xffc8
+const GDK_KEY_F12: i64 = 0xffc9
+const GDK_KEY_ISO_Left_Tab: i64 = 0xfe20
+
+// GDK Modifier masks
+const GDK_CONTROL_MASK: i64 = 4
+const GDK_SHIFT_MASK: i64 = 1
+const GDK_ALT_MASK: i64 = 8
+const GDK_SUPER_MASK: i64 = 0x4000000

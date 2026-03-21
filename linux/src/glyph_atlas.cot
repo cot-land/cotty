@@ -1,0 +1,289 @@
+/// FreeType glyph atlas — rasterizes glyphs into an OpenGL R8 texture.
+/// Port of macos/Sources/Cotty/GlyphAtlas.swift.
+
+import "gl"
+import "freetype"
+import "theme"
+
+const ATLAS_COLS: i64 = 32
+const CACHE_MAX: i64 = 1024
+
+// FreeType state
+var g_ft_lib: i64 = 0
+var g_ft_face: i64 = 0
+var g_ft_face_bold: i64 = 0
+var g_ft_face_italic: i64 = 0
+
+// Atlas dimensions (pixels at display scale)
+var g_atlas_tex: i64 = 0
+var g_cell_width: i64 = 0
+var g_cell_height: i64 = 0
+var g_atlas_width: i64 = 0
+var g_atlas_height: i64 = 0
+var g_ascent: i64 = 0
+var g_descent: i64 = 0
+
+// Slot management
+var g_next_slot: i64 = 0
+var g_total_slots: i64 = 0
+
+// Glyph cache — parallel arrays, linear scan
+var g_cache_keys: i64 = 0
+var g_cache_infos: i64 = 0
+var g_cache_count: i64 = 0
+
+// Result globals — set by atlas_lookup / atlas_lookup_styled / atlas_solid
+var g_glyph_ax: i64 = 0
+var g_glyph_ay: i64 = 0
+var g_glyph_w: i64 = 0
+var g_glyph_h: i64 = 0
+
+// ============================================================================
+// Cache
+// ============================================================================
+
+fn cache_lookup(key: i64) i64 {
+    for i in 0..g_cache_count {
+        if (@intToPtr(*i64, g_cache_keys + i * 8).* == key) {
+            const base = g_cache_infos + i * 32
+            g_glyph_ax = @intToPtr(*i64, base).*
+            g_glyph_ay = @intToPtr(*i64, base + 8).*
+            g_glyph_w = @intToPtr(*i64, base + 16).*
+            g_glyph_h = @intToPtr(*i64, base + 24).*
+            return 1
+        }
+    }
+    return 0
+}
+
+fn cache_insert(key: i64, ax: i64, ay: i64, w: i64, h: i64) void {
+    if (g_cache_count >= CACHE_MAX) { return }
+    @intToPtr(*i64, g_cache_keys + g_cache_count * 8).* = key
+    const base = g_cache_infos + g_cache_count * 32
+    @intToPtr(*i64, base).* = ax
+    @intToPtr(*i64, base + 8).* = ay
+    @intToPtr(*i64, base + 16).* = w
+    @intToPtr(*i64, base + 24).* = h
+    g_cache_count = g_cache_count + 1
+}
+
+// ============================================================================
+// Font discovery via fontconfig
+// ============================================================================
+
+fn load_face(lib: i64, family_ptr: i64, weight: i64, slant: i64) i64 {
+    const pat = FcPatternCreate()
+    FcPatternAddString(pat, @ptrOf("family"), family_ptr)
+    if (weight != 0) { FcPatternAddInteger(pat, @ptrOf("weight"), weight) }
+    if (slant != 0) { FcPatternAddInteger(pat, @ptrOf("slant"), slant) }
+    FcConfigSubstitute(0, pat, FC_MATCH_PATTERN)
+    FcDefaultSubstitute(pat)
+
+    var result: i64 = 0
+    const match = FcFontMatch(0, pat, @ptrToInt(&result))
+    FcPatternDestroy(pat)
+    if (match == 0) { return 0 }
+
+    var file_ptr: i64 = 0
+    FcPatternGetString(match, @ptrOf("file"), 0, @ptrToInt(&file_ptr))
+
+    var face: i64 = 0
+    FT_New_Face(lib, file_ptr, 0, @ptrToInt(&face))
+
+    FcPatternDestroy(match)
+    return face
+}
+
+// ============================================================================
+// Glyph rendering
+// ============================================================================
+
+fn render_glyph_to_slot(face: i64, codepoint: i64) void {
+    if (g_next_slot >= g_total_slots) { return }
+
+    const glyph_idx = FT_Get_Char_Index(face, codepoint)
+    FT_Load_Glyph(face, glyph_idx, FT_LOAD_RENDER)
+
+    const bmp_w = cotty_ft_glyph_bitmap_width(face)
+    const bmp_h = cotty_ft_glyph_bitmap_rows(face)
+    const bmp_pitch = cotty_ft_glyph_bitmap_pitch(face)
+    const bmp_buf = cotty_ft_glyph_bitmap_buffer(face)
+    const bmp_left = cotty_ft_glyph_bitmap_left(face)
+    const bmp_top = cotty_ft_glyph_bitmap_top(face)
+
+    const col = g_next_slot % ATLAS_COLS
+    const row = g_next_slot / ATLAS_COLS
+    const dst_x = col * g_cell_width
+    const dst_y = row * g_cell_height
+    g_next_slot = g_next_slot + 1
+
+    const cell_buf = calloc(g_cell_width * g_cell_height, 1)
+    const off_x = bmp_left
+    const off_y = g_ascent - bmp_top
+
+    for py in 0..bmp_h {
+        for px in 0..bmp_w {
+            const cx = off_x + px
+            const cy = off_y + py
+            if (cx >= 0 and cx < g_cell_width and cy >= 0 and cy < g_cell_height) {
+                const src = @intToPtr(*u8, bmp_buf + py * bmp_pitch + px).*
+                @intToPtr(*u8, cell_buf + cy * g_cell_width + cx).* = src
+            }
+        }
+    }
+
+    cotty_glBindTexture(GL_TEXTURE_2D, g_atlas_tex)
+    cotty_glTexSubImage2D(GL_TEXTURE_2D, 0, dst_x, dst_y, g_cell_width, g_cell_height, GL_RED, GL_UNSIGNED_BYTE, cell_buf)
+    free(cell_buf)
+
+    g_glyph_ax = dst_x
+    g_glyph_ay = dst_y
+    g_glyph_w = g_cell_width
+    g_glyph_h = g_cell_height
+}
+
+fn render_and_cache(face: i64, codepoint: i64, cache_key: i64) void {
+    if (g_next_slot >= g_total_slots) {
+        atlas_solid()
+        cache_insert(cache_key, 0, 0, g_cell_width, g_cell_height)
+        return
+    }
+    const glyph_idx = FT_Get_Char_Index(face, codepoint)
+    if (glyph_idx == 0) {
+        atlas_solid()
+        cache_insert(cache_key, 0, 0, g_cell_width, g_cell_height)
+        return
+    }
+    render_glyph_to_slot(face, codepoint)
+    cache_insert(cache_key, g_glyph_ax, g_glyph_ay, g_glyph_w, g_glyph_h)
+}
+
+// ============================================================================
+// Public API
+// ============================================================================
+
+/// Solid white cell (slot 0) — backgrounds, cursors, decorations.
+fn atlas_solid() void {
+    g_glyph_ax = 0
+    g_glyph_ay = 0
+    g_glyph_w = g_cell_width
+    g_glyph_h = g_cell_height
+}
+
+/// Look up a glyph. Renders on-demand if not cached. Sets g_glyph_* globals.
+fn atlas_lookup(codepoint: i64) void {
+    if (cache_lookup(codepoint) != 0) { return }
+    if (codepoint < 32) { atlas_solid(); return }
+    render_and_cache(g_ft_face, codepoint, codepoint)
+}
+
+/// Look up a styled glyph (bold/italic). Style bits encoded in cache key.
+fn atlas_lookup_styled(codepoint: i64, bold: i64, italic: i64) void {
+    if (bold == 0 and italic == 0) { atlas_lookup(codepoint); return }
+    if (codepoint < 32) { atlas_solid(); return }
+
+    var key = codepoint
+    if (bold != 0) { key = key | 0x40000000 }
+    if (italic != 0) { key = key | 0x80000000 }
+    if (cache_lookup(key) != 0) { return }
+
+    var face = g_ft_face
+    if (bold != 0 and g_ft_face_bold != 0) { face = g_ft_face_bold }
+    if (italic != 0 and g_ft_face_italic != 0) { face = g_ft_face_italic }
+    render_and_cache(face, codepoint, key)
+}
+
+/// Create the glyph atlas: fontconfig → FreeType → pre-render ASCII → GL texture.
+fn atlas_create(font_size: i64, scale: i64) void {
+    g_cache_keys = malloc(CACHE_MAX * 8)
+    g_cache_infos = malloc(CACHE_MAX * 32)
+    g_cache_count = 0
+
+    FcInitLoadConfigAndFonts()
+
+    var family_ptr = g_font_name_ptr
+    if (family_ptr == 0) { family_ptr = @ptrOf("monospace") }
+
+    FT_Init_FreeType(@ptrToInt(&g_ft_lib))
+
+    g_ft_face = load_face(g_ft_lib, family_ptr, 0, 0)
+    g_ft_face_bold = load_face(g_ft_lib, family_ptr, FC_WEIGHT_BOLD, 0)
+    g_ft_face_italic = load_face(g_ft_lib, family_ptr, 0, FC_SLANT_ITALIC)
+
+    const pixel_size = font_size * scale
+    FT_Set_Pixel_Sizes(g_ft_face, 0, pixel_size)
+    if (g_ft_face_bold != 0) { FT_Set_Pixel_Sizes(g_ft_face_bold, 0, pixel_size) }
+    if (g_ft_face_italic != 0) { FT_Set_Pixel_Sizes(g_ft_face_italic, 0, pixel_size) }
+
+    g_ascent = cotty_ft_metrics_ascender(g_ft_face)
+    g_descent = cotty_ft_metrics_descender(g_ft_face)
+    g_cell_height = cotty_ft_metrics_height(g_ft_face)
+
+    const m_idx = FT_Get_Char_Index(g_ft_face, 77)
+    FT_Load_Glyph(g_ft_face, m_idx, FT_LOAD_DEFAULT)
+    g_cell_width = cotty_ft_glyph_advance_x(g_ft_face)
+
+    if (g_cell_width < 1) { g_cell_width = pixel_size / 2 }
+    if (g_cell_height < 1) { g_cell_height = pixel_size }
+
+    g_total_slots = 1024
+    const atlas_rows = (g_total_slots + ATLAS_COLS - 1) / ATLAS_COLS
+    g_atlas_width = ATLAS_COLS * g_cell_width
+    g_atlas_height = atlas_rows * g_cell_height
+    g_next_slot = 96
+
+    const atlas_data = calloc(g_atlas_width * g_atlas_height, 1)
+
+    // Slot 0: solid white cell
+    for sy in 0..g_cell_height {
+        for sx in 0..g_cell_width {
+            @intToPtr(*u8, atlas_data + sy * g_atlas_width + sx).* = @intCast(u8, 255)
+        }
+    }
+
+    // Pre-render ASCII 32-126
+    for ascii in 32..127 {
+        const idx = ascii - 32 + 1
+        const col = idx % ATLAS_COLS
+        const row = idx / ATLAS_COLS
+        const dst_x = col * g_cell_width
+        const dst_y = row * g_cell_height
+
+        const glyph_idx = FT_Get_Char_Index(g_ft_face, ascii)
+        if (glyph_idx != 0) {
+            FT_Load_Glyph(g_ft_face, glyph_idx, FT_LOAD_RENDER)
+            const bmp_w = cotty_ft_glyph_bitmap_width(g_ft_face)
+            const bmp_h = cotty_ft_glyph_bitmap_rows(g_ft_face)
+            const bmp_pitch = cotty_ft_glyph_bitmap_pitch(g_ft_face)
+            const bmp_buf = cotty_ft_glyph_bitmap_buffer(g_ft_face)
+            const bmp_left = cotty_ft_glyph_bitmap_left(g_ft_face)
+            const bmp_top = cotty_ft_glyph_bitmap_top(g_ft_face)
+            const off_x = bmp_left
+            const off_y = g_ascent - bmp_top
+
+            for py in 0..bmp_h {
+                for px in 0..bmp_w {
+                    const cx = off_x + px
+                    const cy = off_y + py
+                    if (cx >= 0 and cx < g_cell_width and cy >= 0 and cy < g_cell_height) {
+                        const src = @intToPtr(*u8, bmp_buf + py * bmp_pitch + px).*
+                        @intToPtr(*u8, atlas_data + (dst_y + cy) * g_atlas_width + dst_x + cx).* = src
+                    }
+                }
+            }
+        }
+        cache_insert(ascii, dst_x, dst_y, g_cell_width, g_cell_height)
+    }
+
+    // Create GL texture
+    cotty_glGenTextures(1, @ptrToInt(&g_atlas_tex))
+    cotty_glBindTexture(GL_TEXTURE_2D, g_atlas_tex)
+    cotty_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
+    cotty_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
+    cotty_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
+    cotty_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
+    cotty_glPixelStorei(GL_UNPACK_ALIGNMENT, 1)
+    cotty_glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, g_atlas_width, g_atlas_height, 0, GL_RED, GL_UNSIGNED_BYTE, atlas_data)
+
+    free(atlas_data)
+}

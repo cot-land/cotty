@@ -1,0 +1,39 @@
+/// FreeType2 + Fontconfig extern declarations.
+
+// FreeType2
+extern fn FT_Init_FreeType(library: i64) i64
+extern fn FT_New_Face(library: i64, path: i64, face_index: i64, face: i64) i64
+extern fn FT_Set_Pixel_Sizes(face: i64, width: i64, height: i64) i64
+extern fn FT_Get_Char_Index(face: i64, charcode: i64) i64
+extern fn FT_Load_Glyph(face: i64, glyph_index: i64, load_flags: i64) i64
+
+const FT_LOAD_RENDER: i64 = 4
+const FT_LOAD_DEFAULT: i64 = 0
+
+// FT_Face field access shim (vendor/ft_shim.c)
+extern fn cotty_ft_metrics_ascender(face: i64) i64
+extern fn cotty_ft_metrics_descender(face: i64) i64
+extern fn cotty_ft_metrics_height(face: i64) i64
+extern fn cotty_ft_glyph_advance_x(face: i64) i64
+extern fn cotty_ft_glyph_bitmap_rows(face: i64) i64
+extern fn cotty_ft_glyph_bitmap_width(face: i64) i64
+extern fn cotty_ft_glyph_bitmap_pitch(face: i64) i64
+extern fn cotty_ft_glyph_bitmap_buffer(face: i64) i64
+extern fn cotty_ft_glyph_bitmap_left(face: i64) i64
+extern fn cotty_ft_glyph_bitmap_top(face: i64) i64
+
+// Fontconfig
+extern fn FcInitLoadConfigAndFonts() i64
+extern fn FcPatternCreate() i64
+extern fn FcPatternDestroy(pattern: i64) void
+extern fn FcPatternAddString(pattern: i64, object: i64, value: i64) i64
+extern fn FcPatternAddInteger(pattern: i64, object: i64, value: i64) i64
+extern fn FcConfigSubstitute(config: i64, pattern: i64, kind: i64) i64
+extern fn FcDefaultSubstitute(pattern: i64) void
+extern fn FcFontMatch(config: i64, pattern: i64, result: i64) i64
+extern fn FcPatternGetString(pattern: i64, object: i64, n: i64, value: i64) i64
+
+// Fontconfig constants — string keys are passed via @ptrOf("family") etc
+const FC_WEIGHT_BOLD: i64 = 200
+const FC_SLANT_ITALIC: i64 = 100
+const FC_MATCH_PATTERN: i64 = 0

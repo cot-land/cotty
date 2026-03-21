@@ -1,0 +1,76 @@
+/// OpenGL via cotty_shim (epoxy uses function pointers, not linkable symbols).
+/// All GL calls go through C wrappers in vendor/gl_shim.c.
+
+// OpenGL constants
+const GL_COLOR_BUFFER_BIT: i64 = 0x4000
+const GL_TEXTURE_2D: i64 = 0x0DE1
+const GL_TEXTURE_MIN_FILTER: i64 = 0x2801
+const GL_TEXTURE_MAG_FILTER: i64 = 0x2800
+const GL_TEXTURE_WRAP_S: i64 = 0x2802
+const GL_TEXTURE_WRAP_T: i64 = 0x2803
+const GL_NEAREST: i64 = 0x2600
+const GL_CLAMP_TO_EDGE: i64 = 0x812F
+const GL_R8: i64 = 0x8229
+const GL_RED: i64 = 0x1903
+const GL_UNSIGNED_BYTE: i64 = 0x1401
+const GL_UNSIGNED_SHORT: i64 = 0x1403
+const GL_SHORT: i64 = 0x1402
+const GL_TRUE: i64 = 1
+const GL_TRIANGLE_STRIP: i64 = 0x0005
+const GL_VERTEX_SHADER: i64 = 0x8B31
+const GL_FRAGMENT_SHADER: i64 = 0x8B30
+const GL_COMPILE_STATUS: i64 = 0x8B81
+const GL_LINK_STATUS: i64 = 0x8B82
+const GL_ARRAY_BUFFER: i64 = 0x8892
+const GL_STREAM_DRAW: i64 = 0x88E0
+const GL_BLEND: i64 = 0x0BE2
+const GL_ONE: i64 = 1
+const GL_ONE_MINUS_SRC_ALPHA: i64 = 0x0303
+const GL_TEXTURE0: i64 = 0x84C0
+const GL_UNPACK_ALIGNMENT: i64 = 0x0CF5
+
+// All GL functions via cotty_shim wrappers (vendor/gl_shim.c)
+extern fn cotty_glCreateShader(type_: i64) i64
+extern fn cotty_glShaderSource(shader: i64, count: i64, src_ptr: i64, length: i64) void
+extern fn cotty_glCompileShader(shader: i64) void
+extern fn cotty_glGetShaderiv(shader: i64, pname: i64, params: i64) void
+extern fn cotty_glDeleteShader(shader: i64) void
+extern fn cotty_glCreateProgram() i64
+extern fn cotty_glAttachShader(program: i64, shader: i64) void
+extern fn cotty_glLinkProgram(program: i64) void
+extern fn cotty_glUseProgram(program: i64) void
+extern fn cotty_glDeleteProgram(program: i64) void
+extern fn cotty_glGetUniformLocation(program: i64, name: i64) i64
+extern fn cotty_glUniform1i(location: i64, v0: i64) void
+extern fn cotty_glGenVertexArrays(n: i64, arrays: i64) void
+extern fn cotty_glGenBuffers(n: i64, buffers: i64) void
+extern fn cotty_glBindVertexArray(array: i64) void
+extern fn cotty_glBindBuffer(target: i64, buffer: i64) void
+extern fn cotty_glBufferData(target: i64, size: i64, data: i64, usage: i64) void
+extern fn cotty_glEnableVertexAttribArray(index: i64) void
+extern fn cotty_glVertexAttribPointer(index: i64, size: i64, type_: i64, normalized: i64, stride: i64, pointer: i64) void
+extern fn cotty_glVertexAttribIPointer(index: i64, size: i64, type_: i64, stride: i64, pointer: i64) void
+extern fn cotty_glVertexAttribDivisor(index: i64, divisor: i64) void
+extern fn cotty_glDrawArraysInstanced(mode: i64, first: i64, count: i64, instancecount: i64) void
+extern fn cotty_glClear(mask: i64) void
+extern fn cotty_glEnable(cap: i64) void
+extern fn cotty_glBlendFunc(sfactor: i64, dfactor: i64) void
+extern fn cotty_glPixelStorei(pname: i64, param: i64) void
+extern fn cotty_glGenTextures(n: i64, textures: i64) void
+extern fn cotty_glBindTexture(target: i64, texture: i64) void
+extern fn cotty_glTexParameteri(target: i64, pname: i64, param: i64) void
+extern fn cotty_glTexImage2D(target: i64, level: i64, internal: i64, width: i64, height: i64, border: i64, format: i64, type_: i64, data: i64) void
+extern fn cotty_glTexSubImage2D(target: i64, level: i64, xoff: i64, yoff: i64, width: i64, height: i64, format: i64, type_: i64, data: i64) void
+extern fn cotty_glActiveTexture(texture: i64) void
+
+// Float ABI wrappers (convert i64 → float for GL)
+extern fn cotty_gl_clear_color(r: i64, g: i64, b: i64, a: i64) void
+extern fn cotty_gl_uniform2f(loc: i64, v0: i64, v1: i64) void
+extern fn cotty_gl_set_projection(loc: i64, draw_w: i64, draw_h: i64) void
+extern fn cotty_gl_viewport(x: i64, y: i64, w: i64, h: i64) void
+
+// System memory
+extern fn malloc(size: i64) i64
+extern fn calloc(n: i64, size: i64) i64
+extern fn free(ptr: i64) void
+extern fn memcpy(dst: i64, src: i64, n: i64) i64

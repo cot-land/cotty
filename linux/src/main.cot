@@ -1,0 +1,336 @@
+/// Cotty Linux — GTK4 + OpenGL platform shell.
+/// Thin shell: all logic lives in libcotty (Cot core).
+
+import "gtk"
+import "gl"
+import "input"
+import "freetype"
+import "theme"
+import "glyph_atlas"
+import "renderer"
+import "cotty_ffi"
+
+// Action tags (must match cotty.h)
+const ACTION_NONE: i64 = 0
+const ACTION_QUIT: i64 = 1
+const ACTION_MARK_DIRTY: i64 = 4
+
+// Surface kinds
+const SURFACE_TERMINAL: i64 = 1
+
+const F_GETFL: i64 = 3
+const F_SETFL: i64 = 4
+const O_NONBLOCK: i64 = 2048
+
+// Global state
+var g_app_handle: i64 = 0
+var g_gtk_app: i64 = 0
+var g_gl_area: i64 = 0
+var g_window: i64 = 0
+var g_surface: i64 = 0
+var g_scale: i64 = 1
+var g_renderer_ready: i64 = 0
+var g_cursor_visible: i64 = 1
+var g_cursor_blink_counter: i64 = 0
+var g_mouse_pressed: i64 = 0
+var g_read_buf: i64 = 0
+var g_grid_row: i64 = 0
+var g_grid_col: i64 = 0
+
+const BLINK_INTERVAL: i64 = 30
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+fn getScale() i64 {
+    const native = gtk_widget_get_native(g_gl_area)
+    if (native == 0) { return 1 }
+    const gdk_surf = gtk_native_get_surface(native)
+    if (gdk_surf == 0) { return 1 }
+    return gdk_surface_get_scale_factor(gdk_surf)
+}
+
+fn pixelToGrid(x_milli: i64, y_milli: i64) void {
+    const px = x_milli * g_scale / 1000
+    const py = y_milli * g_scale / 1000
+    const pad = g_padding * g_scale
+    g_grid_col = (px - pad) / g_cell_width
+    g_grid_row = (py - pad) / g_cell_height
+    const rows = cotty_terminal_rows(g_surface)
+    const cols = cotty_terminal_cols(g_surface)
+    if (g_grid_row < 0) { g_grid_row = 0 }
+    if (g_grid_row >= rows) { g_grid_row = rows - 1 }
+    if (g_grid_col < 0) { g_grid_col = 0 }
+    if (g_grid_col >= cols) { g_grid_col = cols - 1 }
+}
+
+fn resetCursorBlink() void {
+    g_cursor_visible = 1
+    g_cursor_blink_counter = 0
+}
+
+// ============================================================================
+// GTK callbacks
+// ============================================================================
+
+fn onActivate(app: i64, user_data: i64) void {
+    _ = user_data
+    g_app_handle = cotty_app_new()
+
+    g_window = gtk_application_window_new(app)
+    gtk_window_set_title(g_window, @ptrOf("Cotty"))
+    gtk_window_set_default_size(g_window, 800, 600)
+
+    const gl_area = gtk_gl_area_new()
+    g_gl_area = gl_area
+    gtk_gl_area_set_required_version(gl_area, 3, 3)
+    gtk_gl_area_set_auto_render(gl_area, 0)
+    gtk_widget_set_focusable(gl_area, 1)
+    gtk_widget_set_focus_on_click(gl_area, 1)
+
+    g_signal_connect_data(gl_area, @ptrOf("realize"), @ptrToInt(onRealize), 0, 0, 0)
+    g_signal_connect_data(gl_area, @ptrOf("render"), @ptrToInt(onRender), 0, 0, 0)
+    g_signal_connect_data(gl_area, @ptrOf("unrealize"), @ptrToInt(onUnrealize), 0, 0, 0)
+    g_signal_connect_data(gl_area, @ptrOf("resize"), @ptrToInt(onResize), 0, 0, 0)
+
+    const key_ctrl = gtk_event_controller_key_new()
+    g_signal_connect_data(key_ctrl, @ptrOf("key-pressed"), @ptrToInt(onKeyPressed), 0, 0, 0)
+    gtk_widget_add_controller(gl_area, key_ctrl)
+
+    cotty_input_set_callbacks(@ptrToInt(onMousePress), @ptrToInt(onMouseRelease), @ptrToInt(onMouseMotion), @ptrToInt(onScroll))
+    cotty_setup_input(gl_area)
+
+    gtk_window_set_child(g_window, gl_area)
+    gtk_window_present(g_window)
+    gtk_widget_grab_focus(gl_area)
+
+    g_read_buf = malloc(1024)
+    g_timeout_add(16, @ptrToInt(onTick), 0)
+}
+
+fn onRealize(widget: i64, user_data: i64) void {
+    _ = user_data
+    gtk_gl_area_make_current(widget)
+    theme_load()
+    g_scale = getScale()
+    atlas_create(g_font_size, g_scale)
+    renderer_create()
+    // Terminal surface is created in onResize (first call has actual dimensions).
+    // Don't queue render here — wait for first notify pipe signal so the
+    // shell has time to process the PROMPT_SP overwrite sequence.
+    g_renderer_ready = 1
+}
+
+/// Create terminal surface on first resize (when actual dimensions are known).
+/// Subsequent resizes just resize the existing surface.
+fn ensureSurface(width: i64, height: i64) void {
+    const pad = g_padding * g_scale
+    var new_cols = (width - 2 * pad) / g_cell_width
+    var new_rows = (height - 2 * pad) / g_cell_height
+    if (new_cols < 2) { new_cols = 2 }
+    if (new_rows < 2) { new_rows = 2 }
+
+    if (g_surface == 0) {
+        // Shell integration scripts path (absolute for reliability)
+        const integ_dir = "/home/parallels/cot-land/cotty/libcotty/shell-integration"
+        g_surface = cotty_terminal_surface_new_with_integration(g_app_handle, new_rows, new_cols, @ptrOf(integ_dir), @lenOf(integ_dir))
+        const notify_fd = cotty_terminal_notify_fd(g_surface)
+        if (notify_fd >= 0) {
+            const flags = fcntl(notify_fd, F_GETFL, 0)
+            _ = fcntl(notify_fd, F_SETFL, flags | O_NONBLOCK)
+            _ = g_unix_fd_add(notify_fd, G_IO_IN, @ptrToInt(onNotifyFd), 0)
+        }
+    } else {
+        cotty_terminal_lock(g_surface)
+        cotty_terminal_resize(g_surface, new_rows, new_cols)
+        cotty_terminal_unlock(g_surface)
+    }
+}
+
+fn onRender(area: i64, context: i64, user_data: i64) i64 {
+    _ = context
+    _ = user_data
+    if (g_surface == 0 or g_renderer_ready == 0) { return 0 }
+
+    const width = gtk_widget_get_width(area)
+    const height = gtk_widget_get_height(area)
+    g_scale = getScale()
+    const draw_w = width * g_scale
+    const draw_h = height * g_scale
+    var shape = cotty_terminal_cursor_shape(g_surface)
+    var cur_vis = g_cursor_visible
+    if (cotty_terminal_cursor_visible(g_surface) == 0) { cur_vis = 0 }
+
+    render_terminal(g_surface, draw_w, draw_h, g_scale, cur_vis, shape, 1)
+    return 1
+}
+
+fn onResize(area: i64, width: i64, height: i64, user_data: i64) void {
+    _ = area
+    _ = user_data
+    if (g_renderer_ready == 0 or g_cell_width == 0 or g_cell_height == 0) { return }
+    g_scale = getScale()
+    ensureSurface(width, height)
+}
+
+fn onUnrealize(widget: i64, user_data: i64) void {
+    _ = widget
+    _ = user_data
+    g_renderer_ready = 0
+}
+
+fn onNotifyFd(fd: i64, condition: i64, user_data: i64) i64 {
+    _ = condition
+    _ = user_data
+    while (read(fd, g_read_buf, 1024) > 0) {}
+    // Check if child process exited (pid check)
+    if (g_surface != 0) {
+        if (cotty_terminal_child_pid(g_surface) <= 0) {
+            g_application_quit(g_gtk_app)
+            return 0
+        }
+    }
+    // Don't render here — let the tick timer (16ms) batch renders.
+    // Rendering on every notify causes partial-state frames because
+    // the kernel delivers PTY output in many small buffers.
+    // Ghostty: VSync-driven render, not notify-driven.
+    return 1
+}
+
+fn onKeyPressed(controller: i64, keyval: i64, keycode: i64, state: i64, user_data: i64) i64 {
+    _ = controller
+    _ = keycode
+    _ = user_data
+    if (g_surface == 0) { return 0 }
+
+    const mods = translateMods(state)
+    const key = translateKeyval(keyval)
+
+    if (key != 0) {
+        cotty_terminal_lock(g_surface)
+        cotty_terminal_selection_clear(g_surface)
+        cotty_terminal_key(g_surface, key, mods)
+        cotty_terminal_unlock(g_surface)
+        resetCursorBlink()
+        gtk_gl_area_queue_render(g_gl_area)
+        return 1
+    }
+
+    const unicode = gdk_keyval_to_unicode(keyval)
+    if (unicode >= 32) {
+        cotty_terminal_lock(g_surface)
+        cotty_terminal_selection_clear(g_surface)
+        cotty_terminal_key(g_surface, unicode, mods)
+        cotty_terminal_unlock(g_surface)
+        resetCursorBlink()
+        gtk_gl_area_queue_render(g_gl_area)
+        return 1
+    }
+    return 0
+}
+
+fn onTick(user_data: i64) i64 {
+    _ = user_data
+    if (g_app_handle == 0) { return 1 }
+    cotty_app_tick(g_app_handle)
+
+    var action = cotty_app_next_action(g_app_handle)
+    while (action != ACTION_NONE) {
+        if (action == ACTION_QUIT) { g_application_quit(g_gtk_app) }
+        if (action == ACTION_MARK_DIRTY) { gtk_gl_area_queue_render(g_gl_area) }
+        action = cotty_app_next_action(g_app_handle)
+    }
+
+    // Always queue render on tick — Ghostty uses VSync (CVDisplayLink) which
+    // checks an atomic dirty flag. We use a 16ms tick timer (~60fps) which
+    // serves the same purpose. The renderer is fast (just reads cells + GL flush).
+    if (g_surface != 0) {
+        gtk_gl_area_queue_render(g_gl_area)
+    }
+
+    g_cursor_blink_counter = g_cursor_blink_counter + 1
+    if (g_cursor_blink_counter >= BLINK_INTERVAL) {
+        g_cursor_blink_counter = 0
+        if (g_cursor_visible != 0) { g_cursor_visible = 0 } else { g_cursor_visible = 1 }
+        gtk_gl_area_queue_render(g_gl_area)
+    }
+    return 1
+}
+
+// ============================================================================
+// Mouse input (called from C shim with milli-pixel coordinates)
+// ============================================================================
+
+fn onMousePress(n_press: i64, x_milli: i64, y_milli: i64) void {
+    if (g_surface == 0) { return }
+    g_mouse_pressed = 1
+    pixelToGrid(x_milli, y_milli)
+
+    cotty_terminal_lock(g_surface)
+    const mouse_mode = cotty_terminal_mouse_mode(g_surface)
+    if (mouse_mode != 0) {
+        cotty_terminal_mouse_event(g_surface, 0, g_grid_col + 1, g_grid_row + 1, 1, 0)
+        cotty_terminal_unlock(g_surface)
+        gtk_gl_area_queue_render(g_gl_area)
+        return
+    }
+    if (n_press == 2) { cotty_terminal_select_word(g_surface, g_grid_row, g_grid_col) }
+    else if (n_press == 3) { cotty_terminal_select_line(g_surface, g_grid_row) }
+    else { cotty_terminal_selection_start(g_surface, g_grid_row, g_grid_col) }
+    cotty_terminal_unlock(g_surface)
+    gtk_gl_area_queue_render(g_gl_area)
+}
+
+fn onMouseRelease(n_press: i64, x_milli: i64, y_milli: i64) void {
+    _ = n_press
+    if (g_surface == 0) { return }
+    g_mouse_pressed = 0
+    pixelToGrid(x_milli, y_milli)
+    cotty_terminal_lock(g_surface)
+    if (cotty_terminal_mouse_mode(g_surface) != 0) {
+        cotty_terminal_mouse_event(g_surface, 0, g_grid_col + 1, g_grid_row + 1, 0, 0)
+    }
+    cotty_terminal_unlock(g_surface)
+}
+
+fn onMouseMotion(x_milli: i64, y_milli: i64) void {
+    if (g_surface == 0 or g_mouse_pressed == 0) { return }
+    pixelToGrid(x_milli, y_milli)
+    cotty_terminal_lock(g_surface)
+    const mouse_mode = cotty_terminal_mouse_mode(g_surface)
+    if (mouse_mode >= 1002) {
+        cotty_terminal_mouse_event(g_surface, 32, g_grid_col + 1, g_grid_row + 1, 1, 0)
+        cotty_terminal_unlock(g_surface)
+        gtk_gl_area_queue_render(g_gl_area)
+        return
+    }
+    if (mouse_mode != 0) { cotty_terminal_unlock(g_surface); return }
+    cotty_terminal_selection_update(g_surface, g_grid_row, g_grid_col)
+    cotty_terminal_unlock(g_surface)
+    gtk_gl_area_queue_render(g_gl_area)
+}
+
+fn onScroll(dx_milli: i64, dy_milli: i64) void {
+    _ = dx_milli
+    if (g_surface == 0) { return }
+    const delta = dy_milli * g_scale
+    const cell_h = g_cell_height * 1000
+    cotty_terminal_lock(g_surface)
+    cotty_terminal_scroll(g_surface, delta, 1, cell_h, 1, 1)
+    cotty_terminal_unlock(g_surface)
+    gtk_gl_area_queue_render(g_gl_area)
+}
+
+// ============================================================================
+// Entry point
+// ============================================================================
+
+fn main() void {
+    const app = gtk_application_new(@ptrOf("com.cotland.cotty"), 0)
+    g_gtk_app = app
+    g_signal_connect_data(app, @ptrOf("activate"), @ptrToInt(onActivate), 0, 0, 0)
+    _ = g_application_run(app, 0, 0)
+    if (g_app_handle != 0) { cotty_app_free(g_app_handle) }
+    g_object_unref(app)
+}

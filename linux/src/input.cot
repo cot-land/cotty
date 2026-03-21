@@ -1,0 +1,68 @@
+/// GDK key translation → Cot KEY_* constants.
+/// Mirrors CottySurface.translateKeyEvent() from macOS Swift.
+
+import "gtk"
+
+// Cot KEY_* constants (must match libcotty/src/input.cot)
+const KEY_BACKSPACE: i64 = 8
+const KEY_TAB: i64 = 9
+const KEY_ENTER: i64 = 13
+const KEY_ESCAPE: i64 = 27
+const KEY_DELETE: i64 = 127
+const KEY_ARROW_UP: i64 = 256
+const KEY_ARROW_DOWN: i64 = 257
+const KEY_ARROW_LEFT: i64 = 258
+const KEY_ARROW_RIGHT: i64 = 259
+const KEY_HOME: i64 = 260
+const KEY_END: i64 = 261
+const KEY_PAGE_UP: i64 = 262
+const KEY_PAGE_DOWN: i64 = 263
+const KEY_F1: i64 = 264
+const KEY_INSERT: i64 = 276
+
+// Cot modifier flags (must match libcotty/src/input.cot)
+const MOD_CTRL: i64 = 1
+const MOD_SHIFT: i64 = 2
+const MOD_ALT: i64 = 4
+const MOD_SUPER: i64 = 8
+
+/// Translate GDK modifier state to Cot modifier flags.
+fn translateMods(state: i64) i64 {
+    var mods: i64 = 0
+    if (state & GDK_CONTROL_MASK != 0) { mods = mods | MOD_CTRL }
+    if (state & GDK_SHIFT_MASK != 0)   { mods = mods | MOD_SHIFT }
+    if (state & GDK_ALT_MASK != 0)     { mods = mods | MOD_ALT }
+    if (state & GDK_SUPER_MASK != 0)   { mods = mods | MOD_SUPER }
+    return mods
+}
+
+/// Translate a GDK keyval to Cot key constant.
+/// Returns the Cot key code, or 0 if not translatable.
+fn translateKeyval(keyval: i64) i64 {
+    if (keyval == GDK_KEY_BackSpace)    { return KEY_BACKSPACE }
+    if (keyval == GDK_KEY_Tab)          { return KEY_TAB }
+    if (keyval == GDK_KEY_ISO_Left_Tab) { return KEY_TAB }
+    if (keyval == GDK_KEY_Return)       { return KEY_ENTER }
+    if (keyval == GDK_KEY_Escape)       { return KEY_ESCAPE }
+    if (keyval == GDK_KEY_Delete)       { return KEY_DELETE }
+    if (keyval == GDK_KEY_Home)         { return KEY_HOME }
+    if (keyval == GDK_KEY_End)          { return KEY_END }
+    if (keyval == GDK_KEY_Left)         { return KEY_ARROW_LEFT }
+    if (keyval == GDK_KEY_Right)        { return KEY_ARROW_RIGHT }
+    if (keyval == GDK_KEY_Up)           { return KEY_ARROW_UP }
+    if (keyval == GDK_KEY_Down)         { return KEY_ARROW_DOWN }
+    if (keyval == GDK_KEY_Page_Up)      { return KEY_PAGE_UP }
+    if (keyval == GDK_KEY_Page_Down)    { return KEY_PAGE_DOWN }
+    if (keyval == GDK_KEY_Insert)       { return KEY_INSERT }
+
+    // Function keys F1-F12
+    if (keyval >= GDK_KEY_F1 and keyval <= GDK_KEY_F12) {
+        return KEY_F1 + (keyval - GDK_KEY_F1)
+    }
+
+    // Printable characters
+    const unicode = gdk_keyval_to_unicode(keyval)
+    if (unicode >= 32) { return unicode }
+
+    return 0
+}
