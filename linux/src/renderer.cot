@@ -20,7 +20,7 @@ var g_cell_buf: i64 = 0
 var g_cell_count: i64 = 0
 var g_cell_cap: i64 = 0
 const CELL_STRIDE: i64 = 20
-const CELL_DATA_STRIDE: i64 = 88
+const CELL_DATA_STRIDE: i64 = 64
 
 extern fn cotty_glGetProgramiv(program: i64, pname: i64, params: i64) void
 
@@ -127,6 +127,27 @@ fn renderer_flush(draw_w: i64, draw_h: i64, pad_x: i64, pad_y: i64) void {
 }
 
 /// Read an i64 field from cell data at the given field index (0-10).
+// Color resolve scratch
+var g_cr: i64 = 0
+var g_cg: i64 = 0
+var g_cb: i64 = 0
+
+/// Resolve semantic color (type+value) to RGB. Sets g_cr, g_cg, g_cb.
+/// type 0=default, 1=palette, 2=RGB packed.
+fn resolve_color(type_: i64, val: i64, palette_ptr: i64, def_r: i64, def_g: i64, def_b: i64) void {
+    if (type_ == 0) { g_cr = def_r; g_cg = def_g; g_cb = def_b; return }
+    if (type_ == 1 and palette_ptr != 0) {
+        const base = val * 3
+        g_cr = @intToPtr(*i64, palette_ptr + base * 8).*
+        g_cg = @intToPtr(*i64, palette_ptr + (base + 1) * 8).*
+        g_cb = @intToPtr(*i64, palette_ptr + (base + 2) * 8).*
+        return
+    }
+    g_cr = (val >> 16) & 0xFF
+    g_cg = (val >> 8) & 0xFF
+    g_cb = val & 0xFF
+}
+
 fn cell_field(cell_ptr: i64, field: i64) i64 {
     return @intToPtr(*i64, cell_ptr + field * 8).*
 }
@@ -137,6 +158,7 @@ fn render_terminal(surface: i64, draw_w: i64, draw_h: i64, scale: i64,
     cotty_terminal_lock(surface)
 
     const cells_ptr = cotty_terminal_cells_ptr(surface)
+    const palette_ptr = cotty_terminal_palette_ptr(surface)
     const rows = cotty_terminal_rows(surface)
     const cols = cotty_terminal_cols(surface)
     const cursor_row = cotty_terminal_cursor_row(surface)
@@ -150,20 +172,27 @@ fn render_terminal(surface: i64, draw_w: i64, draw_h: i64, scale: i64,
         return
     }
 
-
     renderer_begin()
 
+    // Cell layout: 8 × i64 (codepoint, fg_type, fg_val, bg_type, bg_val, flags, ul_type, ul_val)
     for row in 0..rows {
         for col in 0..cols {
             const cp = cells_ptr + (row * cols + col) * CELL_DATA_STRIDE
             const codepoint = cell_field(cp, 0)
-            var fg_r = cell_field(cp, 1)
-            var fg_g = cell_field(cp, 2)
-            var fg_b = cell_field(cp, 3)
-            var bg_r = cell_field(cp, 4)
-            var bg_g = cell_field(cp, 5)
-            var bg_b = cell_field(cp, 6)
-            const flags = cell_field(cp, 7)
+            const fg_type = cell_field(cp, 1)
+            const fg_val = cell_field(cp, 2)
+            const bg_type = cell_field(cp, 3)
+            const bg_val = cell_field(cp, 4)
+            const flags = cell_field(cp, 5)
+
+            resolve_color(fg_type, fg_val, palette_ptr, g_fg_r, g_fg_g, g_fg_b)
+            var fg_r = g_cr
+            var fg_g = g_cg
+            var fg_b = g_cb
+            resolve_color(bg_type, bg_val, palette_ptr, g_bg_r, g_bg_g, g_bg_b)
+            var bg_r = g_cr
+            var bg_g = g_cg
+            var bg_b = g_cb
 
             // Inverse: swap fg/bg
             if (flags & 4 != 0) {
@@ -175,8 +204,8 @@ fn render_terminal(surface: i64, draw_w: i64, draw_h: i64, scale: i64,
             var fg_alpha: i64 = 255
             if (flags & 16 != 0) { fg_alpha = 128 }
 
-            // Background (if non-default or inverse)
-            if (bg_r != g_bg_r or bg_g != g_bg_g or bg_b != g_bg_b or flags & 4 != 0) {
+            // Background
+            if (bg_type != 0 or flags & 4 != 0) {
                 push_cell(col, row, 0, 0, g_cell_width, g_cell_height, 0, 0, bg_r, bg_g, bg_b, 255)
             }
 
@@ -197,9 +226,12 @@ fn render_terminal(surface: i64, draw_w: i64, draw_h: i64, scale: i64,
                 var dec_g = fg_g
                 var dec_b = fg_b
                 if (flags & 2048 != 0) {
-                    dec_r = cell_field(cp, 8)
-                    dec_g = cell_field(cp, 9)
-                    dec_b = cell_field(cp, 10)
+                    const ul_type = cell_field(cp, 6)
+                    const ul_val = cell_field(cp, 7)
+                    resolve_color(ul_type, ul_val, palette_ptr, fg_r, fg_g, fg_b)
+                    dec_r = g_cr
+                    dec_g = g_cg
+                    dec_b = g_cb
                 }
                 var lh = g_cell_height / 14
                 if (lh < 1) { lh = 1 }

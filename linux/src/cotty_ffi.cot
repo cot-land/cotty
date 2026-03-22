@@ -18,6 +18,7 @@ extern fn cotty_terminal_resize(surface: i64, rows: i64, cols: i64) void
 extern fn cotty_terminal_rows(surface: i64) i64
 extern fn cotty_terminal_cols(surface: i64) i64
 extern fn cotty_terminal_cells_ptr(surface: i64) i64
+extern fn cotty_terminal_palette_ptr(surface: i64) i64
 extern fn cotty_terminal_cursor_row(surface: i64) i64
 extern fn cotty_terminal_cursor_col(surface: i64) i64
 extern fn cotty_terminal_cursor_visible(surface: i64) i64
