@@ -33,6 +33,20 @@ extern fn cotty_terminal_select_word(surface: i64, row: i64, col: i64) void
 extern fn cotty_terminal_select_line(surface: i64, row: i64) void
 extern fn cotty_terminal_scroll(surface: i64, delta: i64, precise: i64, cell_height: i64, col: i64, row: i64) void
 
+// Workspace
+extern fn cotty_workspace_new(app: i64) i64
+extern fn cotty_workspace_add_terminal_tab(ws: i64, rows: i64, cols: i64) i64
+extern fn cotty_workspace_add_editor_tab(ws: i64) i64
+extern fn cotty_workspace_select_tab(ws: i64, index: i64) void
+extern fn cotty_workspace_close_tab(ws: i64, index: i64) i64
+extern fn cotty_workspace_tab_count(ws: i64) i64
+extern fn cotty_workspace_selected_index(ws: i64) i64
+extern fn cotty_workspace_tab_surface(ws: i64, index: i64) i64
+extern fn cotty_workspace_tab_is_terminal(ws: i64, index: i64) i64
+extern fn cotty_workspace_tab_is_dirty(ws: i64, index: i64) i64
+extern fn cotty_workspace_tab_title(ws: i64, index: i64) i64
+extern fn cotty_workspace_tab_title_len(ws: i64, index: i64) i64
+
 // Surface queries
 extern fn cotty_surface_kind(surface: i64) i64
 extern fn cotty_surface_is_dirty(surface: i64) i64

@@ -80,22 +80,37 @@ fn resetCursorBlink() void {
 // GTK callbacks
 // ============================================================================
 
+fn loadCss() void {
+    const css = "window { background-color: #242624; } .tab-bar { background-color: #242624; padding: 4px 8px; } .tab-bar button { background: #333533; color: #d9d9d9; border: none; border-radius: 6px; padding: 4px 16px; min-height: 24px; font-size: 13px; } .tab-bar button:hover { background: #444644; } .tab-bar button.active-tab { background: #1a1a1a; } .tab-bar button.add-tab { background: transparent; padding: 4px 8px; } .tab-bar button.add-tab:hover { background: #333533; } .status-bar { background-color: #242624; padding: 2px 8px; color: #888888; font-size: 12px; } .status-bar label { color: #888888; font-size: 12px; }"
+    const provider = gtk_css_provider_new()
+    gtk_css_provider_load_from_string(provider, @ptrOf(css))
+    gtk_style_context_add_provider_for_display(gdk_display_get_default(), provider, GTK_STYLE_PROVIDER_PRIORITY_APPLICATION)
+}
+
 fn onActivate(app: i64, user_data: i64) void {
     _ = user_data
     g_app_handle = cotty_app_new()
+    loadCss()
 
     g_window = gtk_application_window_new(app)
     gtk_window_set_title(g_window, @ptrOf("Cotty"))
-    gtk_window_set_default_size(g_window, 1200, 800)
+    gtk_window_set_default_size(g_window, 900, 600)
 
     // Main vertical layout: tab bar → separator → content → separator → status bar
     const vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0)
 
-    // Tab bar (Phase 2 — placeholder for now)
-    g_tab_bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4)
+    // Tab bar
+    g_tab_bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 2)
     gtk_widget_set_size_request(g_tab_bar, -1, 36)
-    const tab_label = gtk_label_new(@ptrOf("  Terminal"))
-    gtk_box_append(g_tab_bar, tab_label)
+    gtk_widget_add_css_class(g_tab_bar, @ptrOf("tab-bar"))
+    // First tab button
+    const tab_btn = gtk_button_new_with_label(@ptrOf(" Terminal "))
+    gtk_widget_add_css_class(tab_btn, @ptrOf("active-tab"))
+    gtk_box_append(g_tab_bar, tab_btn)
+    // "+" add tab button
+    const add_btn = gtk_button_new_with_label(@ptrOf(" + "))
+    gtk_widget_add_css_class(add_btn, @ptrOf("add-tab"))
+    gtk_box_append(g_tab_bar, add_btn)
     gtk_box_append(vbox, g_tab_bar)
     gtk_box_append(vbox, gtk_separator_new(GTK_ORIENTATION_HORIZONTAL))
 
@@ -139,9 +154,10 @@ fn onActivate(app: i64, user_data: i64) void {
 
     gtk_box_append(vbox, gtk_separator_new(GTK_ORIENTATION_HORIZONTAL))
 
-    // Status bar (Phase 3 — static placeholder)
+    // Status bar
     g_status_bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8)
     gtk_widget_set_size_request(g_status_bar, -1, 28)
+    gtk_widget_add_css_class(g_status_bar, @ptrOf("status-bar"))
     g_mode_label = gtk_label_new(@ptrOf("  TERMINAL"))
     g_pos_label = gtk_label_new(@ptrOf(""))
     gtk_widget_set_hexpand(g_mode_label, 1)

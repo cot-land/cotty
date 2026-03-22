@@ -68,6 +68,16 @@ const GTK_ALIGN_START: i64 = 1
 const GTK_ALIGN_END: i64 = 2
 const GTK_ALIGN_CENTER: i64 = 3
 
+// GTK CSS styling
+extern fn gtk_css_provider_new() i64
+extern fn gtk_css_provider_load_from_string(provider: i64, css: i64) void
+extern fn gtk_style_context_add_provider_for_display(display: i64, provider: i64, priority: i64) void
+extern fn gdk_display_get_default() i64
+extern fn gtk_widget_add_css_class(widget: i64, class_name: i64) void
+extern fn gtk_widget_remove_css_class(widget: i64, class_name: i64) void
+
+const GTK_STYLE_PROVIDER_PRIORITY_APPLICATION: i64 = 600
+
 // GTK GL Area
 extern fn gtk_gl_area_new() i64
 extern fn gtk_gl_area_make_current(area: i64) void
