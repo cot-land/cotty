@@ -5,6 +5,7 @@ extern fn cotty_app_new() i64
 extern fn cotty_app_free(app: i64) void
 extern fn cotty_app_tick(app: i64) void
 extern fn cotty_app_next_action(app: i64) i64
+extern fn cotty_app_set_integration_dir(app: i64, ptr: i64, len: i64) void
 
 // Terminal surface
 extern fn cotty_terminal_surface_new(app: i64, rows: i64, cols: i64) i64

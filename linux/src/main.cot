@@ -34,6 +34,7 @@ var g_cursor_visible: i64 = 1
 var g_cursor_blink_counter: i64 = 0
 var g_mouse_pressed: i64 = 0
 var g_read_buf: i64 = 0
+var g_workspace: i64 = 0
 var g_tab_bar: i64 = 0
 var g_content_paned: i64 = 0
 var g_sidebar: i64 = 0
@@ -90,6 +91,14 @@ fn loadCss() void {
 fn onActivate(app: i64, user_data: i64) void {
     _ = user_data
     g_app_handle = cotty_app_new()
+
+    // Set shell integration dir so workspace tabs get ZDOTDIR injection
+    const integ_dir = "/home/parallels/cot-land/cotty/libcotty/shell-integration"
+    cotty_app_set_integration_dir(g_app_handle, @ptrOf(integ_dir), @lenOf(integ_dir))
+
+    // Create workspace for tab management
+    g_workspace = cotty_workspace_new(g_app_handle)
+
     loadCss()
 
     g_window = gtk_application_window_new(app)
@@ -199,9 +208,8 @@ fn ensureSurface(width: i64, height: i64) void {
     if (new_rows < 2) { new_rows = 2 }
 
     if (g_surface == 0) {
-        // Shell integration scripts path (absolute for reliability)
-        const integ_dir = "/home/parallels/cot-land/cotty/libcotty/shell-integration"
-        g_surface = cotty_terminal_surface_new_with_integration(g_app_handle, new_rows, new_cols, @ptrOf(integ_dir), @lenOf(integ_dir))
+        // Create first terminal tab via workspace (uses app's integration_dir)
+        g_surface = cotty_workspace_add_terminal_tab(g_workspace, new_rows, new_cols)
         const notify_fd = cotty_terminal_notify_fd(g_surface)
         if (notify_fd >= 0) {
             const flags = fcntl(notify_fd, F_GETFL, 0)
