@@ -225,3 +225,28 @@ int64_t cotty_format_pos(int64_t row, int64_t col) {
     snprintf(g_fmt_buf, sizeof(g_fmt_buf), "Ln %ld, Col %ld  ", (long)(row + 1), (long)col);
     return (int64_t)(intptr_t)g_fmt_buf;
 }
+
+// Format a file tree row label: indent + icon + name
+static char g_tree_buf[512];
+
+int64_t cotty_format_tree_row(int64_t name_ptr, int64_t name_len, int64_t depth, int64_t is_dir, int64_t is_expanded) {
+    char *dst = g_tree_buf;
+    // Indent: 2 spaces per depth level
+    for (int i = 0; i < depth * 2 && i < 40; i++) {
+        *dst++ = ' ';
+    }
+    // Icon
+    if (is_dir) {
+        const char *icon = is_expanded ? "▾ " : "▸ ";
+        while (*icon) *dst++ = *icon++;
+    } else {
+        *dst++ = ' '; *dst++ = ' ';
+    }
+    // Name
+    const char *src = (const char *)(intptr_t)name_ptr;
+    for (int i = 0; i < name_len && i < 450; i++) {
+        *dst++ = src[i];
+    }
+    *dst = '\0';
+    return (int64_t)(intptr_t)g_tree_buf;
+}

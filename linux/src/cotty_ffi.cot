@@ -49,6 +49,22 @@ extern fn cotty_workspace_tab_is_dirty(ws: i64, index: i64) i64
 extern fn cotty_workspace_tab_title(ws: i64, index: i64) i64
 extern fn cotty_workspace_tab_title_len(ws: i64, index: i64) i64
 
+// File tree
+extern fn cotty_filetree_new(root_ptr: i64, root_len: i64) i64
+extern fn cotty_filetree_free(tree: i64) void
+extern fn cotty_filetree_set_root(tree: i64, ptr: i64, len: i64) void
+extern fn cotty_filetree_row_count(tree: i64) i64
+extern fn cotty_filetree_toggle_expand(tree: i64, row: i64) void
+extern fn cotty_filetree_select_row(tree: i64, row: i64) void
+extern fn cotty_filetree_selected_row(tree: i64) i64
+extern fn cotty_filetree_row_name(tree: i64, row: i64) i64
+extern fn cotty_filetree_row_name_len(tree: i64, row: i64) i64
+extern fn cotty_filetree_row_depth(tree: i64, row: i64) i64
+extern fn cotty_filetree_row_is_dir(tree: i64, row: i64) i64
+extern fn cotty_filetree_row_is_expanded(tree: i64, row: i64) i64
+extern fn cotty_filetree_row_path(tree: i64, row: i64) i64
+extern fn cotty_filetree_row_path_len(tree: i64, row: i64) i64
+
 // Surface queries
 extern fn cotty_surface_kind(surface: i64) i64
 extern fn cotty_surface_is_dirty(surface: i64) i64
@@ -73,6 +89,7 @@ extern fn cotty_config_sel_bg_b() i64
 
 // String formatting (gl_shim.c)
 extern fn cotty_format_pos(row: i64, col: i64) i64
+extern fn cotty_format_tree_row(name_ptr: i64, name_len: i64, depth: i64, is_dir: i64, is_expanded: i64) i64
 
 // Embedded shader sources (from gl_shim.c)
 extern fn cotty_gl_vert_shader_src() i64
