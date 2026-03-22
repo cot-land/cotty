@@ -51,6 +51,11 @@ extern fn gtk_separator_new(orientation: i64) i64
 extern fn gtk_label_new(text: i64) i64
 extern fn gtk_label_set_text(label: i64, text: i64) void
 
+// GTK Box child management
+extern fn gtk_box_remove(box: i64, child: i64) void
+extern fn gtk_widget_get_first_child(widget: i64) i64
+extern fn gtk_widget_get_next_sibling(widget: i64) i64
+
 // GTK Button
 extern fn gtk_button_new_with_label(label: i64) i64
 
