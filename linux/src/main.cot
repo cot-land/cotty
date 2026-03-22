@@ -38,6 +38,9 @@ var g_workspace: i64 = 0
 var g_tab_bar: i64 = 0
 var g_content_paned: i64 = 0
 var g_sidebar: i64 = 0
+var g_sidebar_list: i64 = 0
+var g_sidebar_visible: i64 = 0
+var g_filetree: i64 = 0
 var g_status_bar: i64 = 0
 var g_mode_label: i64 = 0
 var g_pos_label: i64 = 0
@@ -75,6 +78,189 @@ fn pixelToGrid(x_milli: i64, y_milli: i64) void {
 fn resetCursorBlink() void {
     g_cursor_visible = 1
     g_cursor_blink_counter = 0
+}
+
+// ============================================================================
+// GTK callbacks
+// ============================================================================
+
+// ============================================================================
+// Sidebar + file operations
+// ============================================================================
+
+// ============================================================================
+// Tab bar
+// ============================================================================
+
+fn rebuildTabBar() void {
+    if (g_workspace == 0 or g_tab_bar == 0) { return }
+    const count = cotty_workspace_tab_count(g_workspace)
+    const selected = cotty_workspace_selected_index(g_workspace)
+    boxClearChildren(g_tab_bar)
+    for i in 0..count {
+        const is_terminal = cotty_workspace_tab_is_terminal(g_workspace, i)
+        var btn: i64 = 0
+        if (is_terminal != 0) {
+            btn = gtk_button_new_with_label(@ptrOf(" Terminal "))
+        } else {
+            btn = gtk_button_new_with_label(@ptrOf(" Editor "))
+        }
+        gtk_widget_set_focusable(btn, 0)
+        if (i == selected) { gtk_widget_add_css_class(btn, @ptrOf("active-tab")) }
+        g_signal_connect_data(btn, @ptrOf("clicked"), @ptrToInt(onTabClicked), i, 0, 0)
+        gtk_box_append(g_tab_bar, btn)
+    }
+    const add_btn = gtk_button_new_with_label(@ptrOf(" + "))
+    gtk_widget_add_css_class(add_btn, @ptrOf("add-tab"))
+    gtk_widget_set_focusable(add_btn, 0)
+    g_signal_connect_data(add_btn, @ptrOf("clicked"), @ptrToInt(onAddTabClicked), 0, 0, 0)
+    gtk_box_append(g_tab_bar, add_btn)
+}
+
+fn onTabClicked(button: i64, user_data: i64) void {
+    _ = button
+    if (g_workspace == 0) { return }
+    cotty_workspace_select_tab(g_workspace, user_data)
+    g_surface = cotty_workspace_tab_surface(g_workspace, user_data)
+    const notify_fd = cotty_terminal_notify_fd(g_surface)
+    if (notify_fd >= 0) {
+        const flags = fcntl(notify_fd, F_GETFL, 0)
+        _ = fcntl(notify_fd, F_SETFL, flags | O_NONBLOCK)
+        _ = g_unix_fd_add(notify_fd, G_IO_IN, @ptrToInt(onNotifyFd), 0)
+    }
+    rebuildTabBar()
+    gtk_gl_area_queue_render(g_gl_area)
+    gtk_widget_grab_focus(g_gl_area)
+}
+
+fn onAddTabClicked(button: i64, user_data: i64) void {
+    _ = button
+    _ = user_data
+    if (g_workspace == 0 or g_renderer_ready == 0) { return }
+    const scale = getScale()
+    const pad = g_padding * scale
+    const w = gtk_widget_get_width(g_gl_area)
+    const h = gtk_widget_get_height(g_gl_area)
+    var cols = (w * scale - 2 * pad) / g_cell_width
+    var rows = (h * scale - 2 * pad) / g_cell_height
+    if (cols < 2) { cols = 80 }
+    if (rows < 2) { rows = 24 }
+    g_surface = cotty_workspace_add_terminal_tab(g_workspace, rows, cols)
+    const notify_fd = cotty_terminal_notify_fd(g_surface)
+    if (notify_fd >= 0) {
+        const flags = fcntl(notify_fd, F_GETFL, 0)
+        _ = fcntl(notify_fd, F_SETFL, flags | O_NONBLOCK)
+        _ = g_unix_fd_add(notify_fd, G_IO_IN, @ptrToInt(onNotifyFd), 0)
+    }
+    rebuildTabBar()
+    gtk_gl_area_queue_render(g_gl_area)
+    gtk_widget_grab_focus(g_gl_area)
+}
+
+// ============================================================================
+// Sidebar + file operations
+// ============================================================================
+
+fn boxClearChildren(box: i64) void {
+    var child = gtk_widget_get_first_child(box)
+    while (child != 0) {
+        const next = gtk_widget_get_next_sibling(child)
+        gtk_box_remove(box, child)
+        child = next
+    }
+}
+
+fn rebuildSidebar() void {
+    if (g_filetree == 0 or g_sidebar_list == 0) { return }
+    gtk_list_box_remove_all(g_sidebar_list)
+    const count = cotty_filetree_row_count(g_filetree)
+    for i in 0..count {
+        const name_ptr = cotty_filetree_row_name(g_filetree, i)
+        const name_len = cotty_filetree_row_name_len(g_filetree, i)
+        const depth = cotty_filetree_row_depth(g_filetree, i)
+        const is_dir = cotty_filetree_row_is_dir(g_filetree, i)
+        const is_expanded = cotty_filetree_row_is_expanded(g_filetree, i)
+        const formatted = cotty_format_tree_row(name_ptr, name_len, depth, is_dir, is_expanded)
+        const label = gtk_label_new(formatted)
+        gtk_widget_set_halign(label, GTK_ALIGN_START)
+        gtk_list_box_append(g_sidebar_list, label)
+    }
+}
+
+fn toggleSidebar() void {
+    if (g_sidebar_visible != 0) {
+        g_sidebar_visible = 0
+        gtk_widget_set_visible(g_sidebar, 0)
+    } else {
+        g_sidebar_visible = 1
+        gtk_widget_set_visible(g_sidebar, 1)
+        gtk_paned_set_position(g_content_paned, 200)
+        if (g_filetree == 0) {
+            const cwd = "/home/parallels/cot-land/cotty/linux"
+            g_filetree = cotty_filetree_new(@ptrOf(cwd), @lenOf(cwd))
+        }
+        rebuildSidebar()
+    }
+    gtk_widget_grab_focus(g_gl_area)
+}
+
+/// Sidebar row double-clicked — toggle dir or open file
+fn onSidebarRowActivated(listbox: i64, row: i64, user_data: i64) void {
+    _ = listbox
+    _ = user_data
+    if (g_filetree == 0) { return }
+    const index = gtk_list_box_row_get_index(row)
+    const is_dir = cotty_filetree_row_is_dir(g_filetree, index)
+    if (is_dir != 0) {
+        cotty_filetree_toggle_expand(g_filetree, index)
+        rebuildSidebar()
+    } else {
+        openFileFromTree(index)
+    }
+    gtk_widget_grab_focus(g_gl_area)
+}
+
+/// Open a file from the sidebar tree into an editor tab
+fn openFileFromTree(tree_index: i64) void {
+    if (g_workspace == 0 or g_filetree == 0 or g_renderer_ready == 0) { return }
+    const path_ptr = cotty_filetree_row_path(g_filetree, tree_index)
+    const path_len = cotty_filetree_row_path_len(g_filetree, tree_index)
+    if (path_ptr == 0 or path_len == 0) { return }
+
+    // Read file content
+    const content_ptr = cotty_read_file(path_ptr, path_len)
+    if (content_ptr == 0) { return }
+    const content_len = cotty_read_file_len()
+
+    // Create editor tab
+    const surface_handle = cotty_workspace_add_editor_tab(g_workspace)
+    // Don't switch g_surface yet — editor surface may be freed by ARC
+    // TODO: fix ARC issue with editor surfaces
+    // g_surface = surface_handle
+    rebuildTabBar()
+    gtk_gl_area_queue_render(g_gl_area)
+}
+
+/// Update status bar labels
+fn updateStatusBar() void {
+    if (g_surface == 0 or g_workspace == 0) { return }
+    if (cotty_workspace_tab_count(g_workspace) == 0) { return }
+    const selected = cotty_workspace_selected_index(g_workspace)
+    const is_terminal = cotty_workspace_tab_is_terminal(g_workspace, selected)
+    if (is_terminal != 0) {
+        gtk_label_set_text(g_mode_label, @ptrOf("  Terminal"))
+        const row = cotty_terminal_cursor_row(g_surface)
+        const col = cotty_terminal_cursor_col(g_surface)
+        gtk_label_set_text(g_pos_label, cotty_format_pos(row, col))
+    } else {
+        gtk_label_set_text(g_mode_label, @ptrOf("  Editor"))
+        // Only query cursor if editor grid exists
+        if (cotty_editor_cells_ptr(g_surface) != 0) {
+            const row = cotty_editor_cursor_row(g_surface)
+            const col = cotty_editor_cursor_col(g_surface)
+            gtk_label_set_text(g_pos_label, cotty_format_pos(row, col))
+        }
+    }
 }
 
 // ============================================================================
@@ -129,8 +315,15 @@ fn onActivate(app: i64, user_data: i64) void {
 
     // Sidebar (Phase 4 — hidden initially)
     g_sidebar = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0)
-    gtk_widget_set_size_request(g_sidebar, 220, -1)
     gtk_widget_set_visible(g_sidebar, 0)
+    gtk_widget_add_css_class(g_sidebar, @ptrOf("sidebar"))
+    const sidebar_scroll = gtk_scrolled_window_new()
+    g_sidebar_list = gtk_list_box_new()
+    gtk_widget_add_css_class(g_sidebar_list, @ptrOf("sidebar"))
+    g_signal_connect_data(g_sidebar_list, @ptrOf("row-activated"), @ptrToInt(onSidebarRowActivated), 0, 0, 0)
+    gtk_scrolled_window_set_child(sidebar_scroll, g_sidebar_list)
+    gtk_widget_set_vexpand(sidebar_scroll, 1)
+    gtk_box_append(g_sidebar, sidebar_scroll)
     gtk_paned_set_start_child(g_content_paned, g_sidebar)
     gtk_paned_set_shrink_start_child(g_content_paned, 0)
     gtk_paned_set_resize_start_child(g_content_paned, 0)
@@ -151,7 +344,7 @@ fn onActivate(app: i64, user_data: i64) void {
 
     const key_ctrl = gtk_event_controller_key_new()
     g_signal_connect_data(key_ctrl, @ptrOf("key-pressed"), @ptrToInt(onKeyPressed), 0, 0, 0)
-    gtk_widget_add_controller(gl_area, key_ctrl)
+    gtk_widget_add_controller(g_window, key_ctrl)
 
     cotty_input_set_callbacks(@ptrToInt(onMousePress), @ptrToInt(onMouseRelease), @ptrToInt(onMouseMotion), @ptrToInt(onScroll))
     cotty_setup_input(gl_area)
@@ -232,11 +425,18 @@ fn onRender(area: i64, context: i64, user_data: i64) i64 {
     g_scale = getScale()
     const draw_w = width * g_scale
     const draw_h = height * g_scale
-    var shape = cotty_terminal_cursor_shape(g_surface)
-    var cur_vis = g_cursor_visible
-    if (cotty_terminal_cursor_visible(g_surface) == 0) { cur_vis = 0 }
 
-    render_terminal(g_surface, draw_w, draw_h, g_scale, cur_vis, shape, 1)
+    const kind = cotty_surface_kind(g_surface)
+    if (kind == 1) {
+        // Terminal
+        var shape = cotty_terminal_cursor_shape(g_surface)
+        var cur_vis = g_cursor_visible
+        if (cotty_terminal_cursor_visible(g_surface) == 0) { cur_vis = 0 }
+        render_terminal(g_surface, draw_w, draw_h, g_scale, cur_vis, shape, 1)
+    } else {
+        // Editor — render editor cell grid
+        render_editor(g_surface, draw_w, draw_h, g_scale)
+    }
     return 1
 }
 
@@ -281,6 +481,23 @@ fn onKeyPressed(controller: i64, keyval: i64, keycode: i64, state: i64, user_dat
     const mods = translateMods(state)
     const key = translateKeyval(keyval)
 
+    // Ctrl+B: toggle sidebar
+    if (mods == MOD_CTRL and key == 98) { toggleSidebar(); return 1 }
+    // Ctrl+T: new terminal tab
+    if (mods == MOD_CTRL and key == 116) { onAddTabClicked(0, 0); return 1 }
+    // Ctrl+W: close current tab
+    if (mods == MOD_CTRL and key == 119) {
+        if (g_workspace != 0) {
+            const sel = cotty_workspace_selected_index(g_workspace)
+            cotty_workspace_close_tab(g_workspace, sel)
+            if (cotty_workspace_tab_count(g_workspace) == 0) { g_application_quit(g_gtk_app); return 1 }
+            g_surface = cotty_workspace_tab_surface(g_workspace, cotty_workspace_selected_index(g_workspace))
+            rebuildTabBar()
+            gtk_gl_area_queue_render(g_gl_area)
+        }
+        return 1
+    }
+
     if (key != 0) {
         cotty_terminal_lock(g_surface)
         cotty_terminal_selection_clear(g_surface)
@@ -322,6 +539,8 @@ fn onTick(user_data: i64) i64 {
     if (g_surface != 0) {
         gtk_gl_area_queue_render(g_gl_area)
     }
+
+    updateStatusBar()
 
     g_cursor_blink_counter = g_cursor_blink_counter + 1
     if (g_cursor_blink_counter >= BLINK_INTERVAL) {

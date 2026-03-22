@@ -250,3 +250,31 @@ int64_t cotty_format_tree_row(int64_t name_ptr, int64_t name_len, int64_t depth,
     *dst = '\0';
     return (int64_t)(intptr_t)g_tree_buf;
 }
+
+// Read a file into a malloc'd buffer. Returns pointer, length via cotty_read_file_len().
+static int64_t g_file_read_len = 0;
+int64_t cotty_read_file_len(void) { return g_file_read_len; }
+
+int64_t cotty_read_file(int64_t path_ptr, int64_t path_len) {
+    char pathbuf[4096];
+    if (path_len >= (int64_t)sizeof(pathbuf)) return 0;
+    memcpy(pathbuf, (const char *)(intptr_t)path_ptr, path_len);
+    pathbuf[path_len] = '\0';
+    
+    FILE *f = fopen(pathbuf, "r");
+    if (!f) return 0;
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    
+    char *buf = malloc(size + 1);
+    if (!buf) { fclose(f); return 0; }
+    size_t read = fread(buf, 1, size, f);
+    fclose(f);
+    buf[read] = '\0';
+    
+    // Pack: ptr in lower 48 bits (enough for userspace), len in upper bits
+    // Actually just return ptr and store len in a global
+    g_file_read_len = (int64_t)read;
+    return (int64_t)(intptr_t)buf;
+}

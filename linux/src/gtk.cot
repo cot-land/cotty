@@ -59,6 +59,7 @@ extern fn gtk_scrolled_window_set_child(window: i64, child: i64) void
 extern fn gtk_list_box_new() i64
 extern fn gtk_list_box_append(box: i64, child: i64) void
 extern fn gtk_list_box_remove_all(box: i64) void
+extern fn gtk_list_box_row_get_index(row: i64) i64
 
 // GTK Box child management
 extern fn gtk_box_remove(box: i64, child: i64) void

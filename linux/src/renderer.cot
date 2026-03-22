@@ -285,3 +285,68 @@ fn render_terminal(surface: i64, draw_w: i64, draw_h: i64, scale: i64,
     cotty_glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA)
     renderer_flush(draw_w, draw_h, pad, pad)
 }
+
+/// Render an editor surface — same cell format as terminal.
+fn render_editor(surface: i64, draw_w: i64, draw_h: i64, scale: i64) void {
+    const pad = g_padding * scale
+    const ed_rows = cotty_editor_rows(surface)
+    const ed_cols = cotty_editor_cols(surface)
+    const ed_base = cotty_editor_cells_ptr(surface)
+
+    if (ed_base == 0 or ed_rows == 0 or ed_cols == 0) {
+        cotty_gl_viewport(0, 0, draw_w, draw_h)
+        cotty_gl_clear_color(g_bg_r, g_bg_g, g_bg_b, 255)
+        cotty_glClear(GL_COLOR_BUFFER_BIT)
+        return
+    }
+
+    renderer_begin()
+
+    for row in 0..ed_rows {
+        for col in 0..ed_cols {
+            const cp = ed_base + (row * ed_cols + col) * CELL_DATA_STRIDE
+            const codepoint = cell_field(cp, 0)
+            const fg_type = cell_field(cp, 1)
+            const fg_val = cell_field(cp, 2)
+            const bg_type = cell_field(cp, 3)
+            const bg_val = cell_field(cp, 4)
+            const flags = cell_field(cp, 5)
+
+            resolve_color(fg_type, fg_val, 0, g_fg_r, g_fg_g, g_fg_b)
+            const fg_r = g_cr
+            const fg_g = g_cg
+            const fg_b = g_cb
+            resolve_color(bg_type, bg_val, 0, g_bg_r, g_bg_g, g_bg_b)
+
+            // Background
+            if (bg_type != 0) {
+                push_cell(col, row, 0, 0, g_cell_width, g_cell_height, 0, 0, g_cr, g_cg, g_cb, 255)
+            }
+
+            // Selection overlay
+            if (flags & 8 != 0) {
+                push_cell(col, row, 0, 0, g_cell_width, g_cell_height, 0, 0, g_sel_r, g_sel_g, g_sel_b, g_sel_a)
+            }
+
+            // Foreground glyph
+            if (codepoint >= 32) {
+                atlas_lookup(codepoint)
+                push_cell(col, row, g_glyph_ax, g_glyph_ay, g_glyph_w, g_glyph_h, 0, 0, fg_r, fg_g, fg_b, 255)
+            }
+
+            // Cursor (CELL_CURSOR = 65536)
+            if (flags & 65536 != 0) {
+                var cw = g_cell_width / 8
+                if (cw < 2) { cw = 2 }
+                push_cell(col, row, 0, 0, cw, g_cell_height, 0, 0, g_cursor_r, g_cursor_g, g_cursor_b, 128)
+            }
+        }
+    }
+
+    cotty_gl_viewport(0, 0, draw_w, draw_h)
+    cotty_gl_clear_color(g_bg_r, g_bg_g, g_bg_b, 255)
+    cotty_glClear(GL_COLOR_BUFFER_BIT)
+    cotty_glEnable(GL_BLEND)
+    cotty_glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA)
+    renderer_flush(draw_w, draw_h, pad, pad)
+}
