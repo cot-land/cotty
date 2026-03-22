@@ -22,6 +22,9 @@ void cotty_app_tick(cotty_app_t app);
 int64_t cotty_app_surface_count(cotty_app_t app);
 int64_t cotty_app_is_running(cotty_app_t app);
 
+// Shell integration
+void cotty_app_set_integration_dir(cotty_app_t app, const void *ptr, int64_t len);
+
 // Action queue
 int64_t cotty_app_next_action(cotty_app_t app);
 int64_t cotty_app_action_payload(cotty_app_t app);
