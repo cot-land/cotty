@@ -214,3 +214,14 @@ void cotty_setup_input(int64_t widget_ptr) {
     g_signal_connect(scroll, "scroll", G_CALLBACK(shim_scroll), NULL);
     gtk_widget_add_controller(w, scroll);
 }
+
+// ============================================================================
+// String formatting helper for GTK label updates
+// ============================================================================
+
+static char g_fmt_buf[256];
+
+int64_t cotty_format_pos(int64_t row, int64_t col) {
+    snprintf(g_fmt_buf, sizeof(g_fmt_buf), "Ln %ld, Col %ld  ", (long)(row + 1), (long)col);
+    return (int64_t)(intptr_t)g_fmt_buf;
+}

@@ -71,6 +71,9 @@ extern fn cotty_config_sel_bg_r() i64
 extern fn cotty_config_sel_bg_g() i64
 extern fn cotty_config_sel_bg_b() i64
 
+// String formatting (gl_shim.c)
+extern fn cotty_format_pos(row: i64, col: i64) i64
+
 // Embedded shader sources (from gl_shim.c)
 extern fn cotty_gl_vert_shader_src() i64
 extern fn cotty_gl_frag_shader_src() i64

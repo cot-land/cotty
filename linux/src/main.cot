@@ -171,6 +171,22 @@ fn onAddTabClicked(button: i64, user_data: i64) void {
     gtk_widget_grab_focus(g_gl_area)
 }
 
+/// Update status bar labels from current surface state
+fn updateStatusBar() void {
+    if (g_surface == 0 or g_workspace == 0) { return }
+    const selected = cotty_workspace_selected_index(g_workspace)
+    const is_terminal = cotty_workspace_tab_is_terminal(g_workspace, selected)
+    if (is_terminal != 0) {
+        gtk_label_set_text(g_mode_label, @ptrOf("  Terminal"))
+        const row = cotty_terminal_cursor_row(g_surface)
+        const col = cotty_terminal_cursor_col(g_surface)
+        gtk_label_set_text(g_pos_label, cotty_format_pos(row, col))
+    } else {
+        gtk_label_set_text(g_mode_label, @ptrOf("  Editor"))
+        gtk_label_set_text(g_pos_label, @ptrOf(""))
+    }
+}
+
 // ============================================================================
 // GTK callbacks
 // ============================================================================
@@ -197,7 +213,7 @@ fn onActivate(app: i64, user_data: i64) void {
 
     g_window = gtk_application_window_new(app)
     gtk_window_set_title(g_window, @ptrOf("Cotty"))
-    gtk_window_set_default_size(g_window, 900, 600)
+    gtk_window_set_default_size(g_window, 800, 600)
 
     // Main vertical layout: tab bar → separator → content → separator → status bar
     g_vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0)
@@ -410,6 +426,9 @@ fn onTick(user_data: i64) i64 {
     if (g_surface != 0) {
         gtk_gl_area_queue_render(g_gl_area)
     }
+
+    // Update status bar
+    updateStatusBar()
 
     g_cursor_blink_counter = g_cursor_blink_counter + 1
     if (g_cursor_blink_counter >= BLINK_INTERVAL) {
