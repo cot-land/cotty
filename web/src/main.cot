@@ -1,0 +1,193 @@
+/// Cotty Web — Browser entry point
+///
+/// Renders terminal grid to Canvas via JS bridge.
+/// Receives input events from JS → processes through terminal/editor.
+/// Terminal data via WebSocket to `cot serve` backend.
+
+import "std/sys"
+import "std/string"
+
+// ============================================================================
+// Platform extern fns — provided by bridge.js via Wasm imports
+// ============================================================================
+
+// Canvas rendering
+extern fn canvas_set_font(size: i64, name_ptr: i64, name_len: i64) void
+extern fn canvas_fill_rect(x: i64, y: i64, w: i64, h: i64, r: i64, g: i64, b: i64) void
+extern fn canvas_fill_text(text_ptr: i64, text_len: i64, x: i64, y: i64, r: i64, g: i64, b: i64) void
+extern fn canvas_clear(r: i64, g: i64, b: i64) void
+extern fn canvas_get_width() i64
+extern fn canvas_get_height() i64
+
+// Logging (console.log via JS)
+extern fn js_log(ptr: i64, len: i64) void
+
+// Timer
+extern fn request_frame() void
+
+// WebSocket
+extern fn ws_connect(url_ptr: i64, url_len: i64) i64
+extern fn ws_send(ws: i64, data_ptr: i64, data_len: i64) void
+
+// ============================================================================
+// Terminal state
+// ============================================================================
+
+const COLS: i64 = 80
+const ROWS: i64 = 24
+const CELL_WIDTH: i64 = 10
+const CELL_HEIGHT: i64 = 20
+
+// Cell grid: each cell = (char_code, fg_r, fg_g, fg_b, bg_r, bg_g, bg_b)
+// Stored as flat array: cells[row * COLS + col] * 7
+var cells: List(i64) = .{}
+var cursor_row: i64 = 0
+var cursor_col: i64 = 0
+var initialized: bool = false
+
+import "std/list"
+
+// ============================================================================
+// Initialization
+// ============================================================================
+
+fn initGrid() void {
+    if (initialized) { return }
+    initialized = true
+
+    // Allocate cell grid
+    const total = ROWS * COLS * 7
+    for i in 0..total {
+        cells.append(0)
+    }
+
+    // Set default colors (Monokai background, light gray foreground)
+    for row in 0..ROWS {
+        for col in 0..COLS {
+            const base = (row * COLS + col) * 7
+            cells.set(base + 0, 32)    // space
+            cells.set(base + 1, 217)   // fg_r
+            cells.set(base + 2, 217)   // fg_g
+            cells.set(base + 3, 217)   // fg_b
+            cells.set(base + 4, 12)    // bg_r
+            cells.set(base + 5, 12)    // bg_g
+            cells.set(base + 6, 12)    // bg_b
+        }
+    }
+
+    // Write welcome message
+    writeString(0, 0, "Cotty — Terminal in the Browser", 152, 224, 36)
+    writeString(1, 0, "Built with Cot, rendered via Canvas", 88, 209, 235)
+    writeString(3, 0, "$ ", 252, 151, 31)
+    cursor_row = 3
+    cursor_col = 2
+}
+
+fn writeString(row: i64, col: i64, text: string, r: i64, g: i64, b: i64) void {
+    for i in 0..@lenOf(text) {
+        if (col + i >= COLS) { break }
+        const base = (row * COLS + col + i) * 7
+        cells.set(base + 0, charAt(text, i))
+        cells.set(base + 1, r)
+        cells.set(base + 2, g)
+        cells.set(base + 3, b)
+    }
+}
+
+// ============================================================================
+// Rendering — called each frame by requestAnimationFrame
+// ============================================================================
+
+/// Called by JS on each animation frame
+export fn cotty_frame() void {
+    initGrid()
+    render()
+    request_frame()
+}
+
+fn render() void {
+    // Clear
+    canvas_clear(12, 12, 12)
+
+    // Set font
+    const font_name = "JetBrains Mono"
+    canvas_set_font(16, @ptrOf(font_name), @lenOf(font_name))
+
+    // Draw cells
+    for row in 0..ROWS {
+        for col in 0..COLS {
+            const base = (row * COLS + col) * 7
+            const ch = cells.get(base + 0)
+            const fg_r = cells.get(base + 1)
+            const fg_g = cells.get(base + 2)
+            const fg_b = cells.get(base + 3)
+            const bg_r = cells.get(base + 4)
+            const bg_g = cells.get(base + 5)
+            const bg_b = cells.get(base + 6)
+
+            const x = col * CELL_WIDTH
+            const y = row * CELL_HEIGHT
+
+            // Draw background (skip if default Monokai bg)
+            if (bg_r != 12 or bg_g != 12 or bg_b != 12) {
+                canvas_fill_rect(x, y, CELL_WIDTH, CELL_HEIGHT, bg_r, bg_g, bg_b)
+            }
+
+            // Draw character (skip spaces)
+            if (ch > 32) {
+                var char_buf: [4]u8 = undefined
+                char_buf[0] = @intCast(u8, ch)
+                canvas_fill_text(@ptrOf(char_buf), 1, x, y + CELL_HEIGHT - 4, fg_r, fg_g, fg_b)
+            }
+        }
+    }
+
+    // Draw cursor (blinking block)
+    const cx = cursor_col * CELL_WIDTH
+    const cy = cursor_row * CELL_HEIGHT
+    canvas_fill_rect(cx, cy, CELL_WIDTH, CELL_HEIGHT, 252, 151, 31)
+}
+
+// ============================================================================
+// Input — called by JS when user types
+// ============================================================================
+
+/// Called by JS on keypress
+export fn cotty_key_press(char_code: i64) void {
+    initGrid()
+
+    if (char_code == 13) {
+        // Enter — new line
+        cursor_row += 1
+        cursor_col = 0
+        if (cursor_row >= ROWS) { cursor_row = ROWS - 1 }
+        writeString(cursor_row, 0, "$ ", 252, 151, 31)
+        cursor_col = 2
+    } else if (char_code == 8) {
+        // Backspace
+        if (cursor_col > 2) {
+            cursor_col -= 1
+            const base = (cursor_row * COLS + cursor_col) * 7
+            cells.set(base + 0, 32)  // space
+        }
+    } else if (char_code >= 32 and char_code < 127) {
+        // Printable character
+        const base = (cursor_row * COLS + cursor_col) * 7
+        cells.set(base + 0, char_code)
+        cells.set(base + 1, 217)
+        cells.set(base + 2, 217)
+        cells.set(base + 3, 217)
+        cursor_col += 1
+        if (cursor_col >= COLS) { cursor_col = COLS - 1 }
+    }
+}
+
+/// Called by JS on special keys (arrows, etc.)
+export fn cotty_key_down(key_code: i64, modifiers: i64) void {
+    // TODO: handle arrow keys, shortcuts
+}
+
+/// Called by JS on resize
+export fn cotty_resize(width: i64, height: i64) void {
+    // TODO: recompute ROWS/COLS from pixel dimensions
+}

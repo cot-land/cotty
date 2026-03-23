@@ -25,10 +25,9 @@ If the Cot compiler doesn't support a pattern you need, **STOP and tell the user
 ```
 CLAUDE.md          This file
 .gitmodules        libcotty submodule reference
-.mcp.json          MCP config
-libcotty.dylib     Symlink → libcotty/libcotty.dylib (gitignored)
 libcotty/          Git submodule → cot-land/libcotty (all Cot source)
-macos/
+                   Terminal emulation, editor, VT parser, workspace — ALL platforms
+macos/             macOS native shell (Swift + Metal rendering)
   Package.swift
   Sources/
     CCottyCore/
@@ -36,22 +35,63 @@ macos/
       shim.c
     Cotty/
       *.swift            macOS app (AppKit, Metal rendering)
+linux/             Linux native shell (GTK4 + OpenGL rendering)
+  src/
+    main.cot             Linux entry point
+    renderer.cot         OpenGL cell renderer
+    glyph_atlas.cot      Font atlas
+    gtk.cot              GTK4 bindings
+web/               Browser shell (Wasm + WebGPU/Canvas) — runs on ALL platforms
+  src/
+    main.cot             Web entry point (compiles to Wasm)
+    render.cot           WebGPU extern fns + cell buffer
+    ws_terminal.cot      WebSocket terminal data channel
+    fs.cot               File System Access API
+  bridge.js              JS host (~200 lines: Canvas, input, WebSocket)
+  shaders/
+    cell.wgsl            WebGPU vertex/fragment shaders
+  dist/
+    index.html           HTML shell
+    cotty.wasm           Built output
+    cotty.js             Generated JS glue
+```
+
+### Architecture
+
+```
+ONE codebase (libcotty — shared Cot logic):
+  Terminal emulation, VT parser, editor, workspace, themes
+
+THREE delivery modes:
+  1. macos/    → Swift/Metal (current, native performance)
+  2. linux/    → GTK4/OpenGL (current, native)
+  3. web/      → Wasm/WebGPU (NEW — runs in browser + native webview)
+
+web/ is platform-independent:
+  Same cotty.wasm runs in Chrome, Firefox, Safari, WKWebView, WebKitGTK
+
+Hybrid data model:
+  Editor:    local files via WASI / File System Access API
+  Terminal:  WebSocket to `cot serve` backend (PTY + shell)
 ```
 
 ## Build Commands
 
 ```bash
-# Build Cot dylib from submodule
+# === macOS (Swift + Metal) ===
 cd libcotty && cot build src/ffi.cot --lib -o libcotty.dylib && cd ..
-
-# Ensure root symlink exists (one-time setup)
-ln -sf libcotty/libcotty.dylib libcotty.dylib
-
-# Build Swift app
+ln -sf libcotty/libcotty.dylib libcotty.dylib  # one-time setup
 cd macos && swift build
-
-# Binary at
 macos/.build/debug/Cotty
+
+# === Linux (GTK4 + OpenGL) ===
+cd linux && cot build src/main.cot -o cotty
+./linux/cotty
+
+# === Web (Wasm + WebGPU/Canvas) ===
+cd web && cot build src/main.cot --target=js -o dist/cotty.wasm
+python3 -m http.server 8080 -d dist/   # serve locally
+open http://localhost:8080              # open in browser
 ```
 
 The root `libcotty.dylib` symlink is needed because the Cot compiler emits bare install names. The Swift linker (`-L..`) and dyld rpath both resolve to the cotty root. The symlink is gitignored.
